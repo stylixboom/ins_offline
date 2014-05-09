@@ -15,7 +15,7 @@ INC = -I/home/stylix/local/include
 CFLAGS = -Wall -fexceptions
 RESINC = 
 LIBDIR = -L/home/stylix/local/lib
-LIB = ../lib/ins/libins.a ../lib/sifthesaff/libsifthesaff.a ../lib/alphautils/libalphautils.a -lopencv_stitching -lopencv_videostab -lopencv_gpu -lopencv_legacy -lopencv_ts -lopencv_nonfree -lopencv_contrib -lopencv_calib3d -lopencv_objdetect -lopencv_features2d -lopencv_video -lopencv_photo -lopencv_highgui -lopencv_flann -lopencv_imgproc -lopencv_ml -lopencv_core -lgomp -lhdf5 -lhdf5_hl_cpp -lhdf5_cpp -lhdf5_hl -lmpi_cxx -lmpi
+LIB = ../lib/ins/libins.a ../lib/sifthesaff/libsifthesaff.a ../lib/alphautils/libalphautils.a -lopencv_stitching -lopencv_videostab -lopencv_gpu -lopencv_legacy -lopencv_ts -lopencv_nonfree -lopencv_contrib -lopencv_calib3d -lopencv_objdetect -lopencv_features2d -lopencv_video -lopencv_photo -lopencv_highgui -lopencv_flann -lopencv_imgproc -lopencv_ml -lopencv_core -lx264 -lfaac -lgomp -lhdf5 -lhdf5_hl_cpp -lhdf5_cpp -lhdf5_hl -lmpi_cxx -lmpi
 LDFLAGS = `pkg-config --libs opencv` -lgomp -lrt -lpthread -ldl
 
 INC_DEBUG = $(INC)
