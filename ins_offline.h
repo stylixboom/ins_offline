@@ -46,7 +46,7 @@ vector<size_t> ImgParentsIdx;
 vector<string> ImgLists;
 //-- Dataset feature
 Matrix<float> dataset_keypoint;         // all keypoint
-Matrix<float> dataset_descriptor;   // all feature descriptor
+Matrix<float> dataset_descriptor;       // all feature descriptor
 vector<int> dataset_feature_count;      // number of features per dataset
 //-- Dataset cluster
 Matrix<float> cluster;
