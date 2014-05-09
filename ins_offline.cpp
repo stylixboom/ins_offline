@@ -29,47 +29,12 @@ int main(int argc,char *argv[])
         for (int param_idx = 1; param_idx < argc; param_idx+=2)
             opts[string(argv[param_idx])] = string(argv[param_idx + 1]);
 
-        // Spawn clustering
-        // command spawnclustering -in
-        // -in is input data file in term of row(size_t),col(size_t),data[0,0](float),data[0,1](float),...,data[row-1,col-1](float)
-        if (opts.find("run") != opts.end())
-        {
-            /// Spawn clustering command
-            if (opts["run"] == "spawnclustering")
-            {
-                if (opts.find("prefix") == opts.end())
-                {
-                    cout << "Please specify \"prefix\"." << endl;
-                    exit(1);
-                }
-                if (opts.find("input") == opts.end())
-                {
-                    cout << "Please specify \"input\"." << endl;
-                    exit(1);
-                }
-                if (opts.find("output") == opts.end())
-                {
-                    cout << "Please specify \"output\"." << endl;
-                    exit(1);
-                }
-                string spawn_prefix = opts["prefix"];
-                string spawn_input = opts["input"];
-                string spawn_output = opts["output"];
-
-                // set parameter
-                run_param.set_presetparam(spawn_prefix);
-
-                // set as global prefix
-                run_param.dataset_prefix = spawn_prefix;
-
-                SubClustering(spawn_prefix, spawn_input, spawn_output);
-            }
-        }
+        // Explicitly run some process here
+        //...
     }
     else // Main menu
     {
         char menu;
-        char sub_menu;
 
         do
         {
@@ -79,7 +44,6 @@ int main(int argc,char *argv[])
             cout << "[k] Preprocess dataset" << endl;
             cout << "[e] Extracting feature (with save)" << endl;
             cout << "[f] Loading extracted features" << endl;
-            cout << "[p] Parallel clustering" << endl;
             cout << "[c] Clustering feature" << endl;
             cout << "[v] Vector quantization" << endl;
             cout << "[b] Bag of word building" << endl;
@@ -118,26 +82,6 @@ int main(int argc,char *argv[])
                 break;
             case 'i':
                 build_invert_index();
-                break;
-            case 'p':
-                int blocks = PARALLEL_BLOCKS;
-                int cpu = PARALLEL_CPU;
-                cout << "==== Parallel Clustering Mode ====" << endl;
-                cout << "*Use defined parallel blocks: " << blocks << endl;
-                cout << "*Use defined parallel cpu: " << cpu << endl;
-                cout << "[m] Run as Master" << endl;
-                cout << "[s] Run as Slave" << endl;
-                cout << "Enter menu: ";
-                cin >> sub_menu;
-                switch (sub_menu)
-                {
-                case 'm':
-                    ParallelClustering(blocks);
-                    break;
-                case 's':
-                    ClusteringJobsTracker(blocks, cpu);
-                    break;
-                }
                 break;
             }
 
@@ -197,6 +141,7 @@ void LoadDataset(const string& DatasetPath)
         int pool_id = -1;
 
         // First parent dir
+        vector<int> ImgPoolLevels;
         ImgParentPaths.push_back(DatasetPath);
         ImgPoolLevels.push_back(0);
 
@@ -588,7 +533,7 @@ void LoadFeature()
     // Release memory
     delete[] dataset_keypoint.ptr();
     delete[] dataset_descriptor.ptr();
-    dataset_feature_count.clear();
+    feature_count_per_pool.clear();
 
     // Feature space
     size_t row_size_dataset = 0;    // dataset size
@@ -646,9 +591,10 @@ void LoadFeature()
                 int num_kp = sifthesaff_dataset.checkNumKp(curr_img_export_path.str(), true);
 
                 /// Feature pooling
-                if ((int)dataset_feature_count.size() < ImgListsPoolIds[img_idx] + 1)
-                    dataset_feature_count.push_back(0);
-                dataset_feature_count[ImgListsPoolIds[img_idx]] += num_kp;
+                if ((int)feature_count_per_pool.size() < ImgListsPoolIds[img_idx] + 1)
+                    feature_count_per_pool.push_back(0);
+                feature_count_per_pool[ImgListsPoolIds[img_idx]] += num_kp; // Accumulating feature count in the pool
+                feature_count_per_image.push_back(num_kp);                  // Keep feature for each image
 
                 row_size_dataset += num_kp;
             }
@@ -674,12 +620,19 @@ void LoadFeature()
         ofstream PoolFile (poolinfo_path.str().c_str(), ios::binary);
         if (PoolFile.is_open())
         {
-            // Write dataset size
-            size_t dataset_size = dataset_feature_count.size();
+            // Write pool_size
+            size_t pool_size = feature_count_per_pool.size();
+            PoolFile.write(reinterpret_cast<char*>(&pool_size), sizeof(pool_size));
+
+            // Write feature_count_per_pool
+            PoolFile.write(reinterpret_cast<char*>(&feature_count_per_pool[0]), feature_count_per_pool.size() * sizeof(feature_count_per_pool[0]));
+
+            // Write dataset_size
+            size_t dataset_size = feature_count_per_image.size();
             PoolFile.write(reinterpret_cast<char*>(&dataset_size), sizeof(dataset_size));
 
             // Write pool
-            PoolFile.write(reinterpret_cast<char*>(&dataset_feature_count[0]), dataset_feature_count.size() * sizeof(dataset_feature_count[0]));
+            PoolFile.write(reinterpret_cast<char*>(&feature_count_per_image[0]), feature_count_per_image.size() * sizeof(feature_count_per_image[0]));
 
             // Close file
             PoolFile.close();
@@ -774,16 +727,28 @@ void LoadFeature()
         ifstream PoolFile (poolinfo_path.str().c_str(), ios::binary);
         if (PoolFile)
         {
-            // Read dataset size
+            // Read pool_size
+            size_t pool_size;
+            PoolFile.read((char*)(&pool_size), sizeof(pool_size));
+
+            // Read feature_count_per_pool
+            for (size_t pool_idx = 0; pool_idx < pool_size; pool_idx++)
+            {
+                int feature_count;
+                PoolFile.read((char*)(&feature_count), sizeof(feature_count));
+                feature_count_per_pool.push_back(feature_count);
+            }
+
+            // Read dataset_size
             size_t dataset_size;
             PoolFile.read((char*)(&dataset_size), sizeof(dataset_size));
 
-            // Read pool
+            // Read feature_count_per_image
             for (size_t dataset_idx = 0; dataset_idx < dataset_size; dataset_idx++)
             {
-                int pool_size;
-                PoolFile.read((char*)(&pool_size), sizeof(pool_size));
-                dataset_feature_count.push_back(pool_size);
+                int feature_count;
+                PoolFile.read((char*)(&feature_count), sizeof(feature_count));
+                feature_count_per_image.push_back(feature_count);
             }
 
             // Close file
@@ -818,408 +783,6 @@ void LoadFeature()
     // Keep dataset pack
     dataset_keypoint = ret_keypoint;
 	dataset_descriptor = ret_feature_vector;
-}
-
-///=============== Master ===============
-void ParallelClustering(int blocks)
-{
-    // If exist preloaded features, enter mapping mode
-    if (dataset_descriptor.cols > 0)
-    {
-        // Map
-        cout << "Mapping feature...";cout.flush();
-        startTime = CurrentPreciseTime();
-        FeatureMap(blocks);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-    }
-
-    // Reduce
-    ClusterReduce(blocks);
-}
-
-void FeatureMap(int blocks)
-{
-    if (dataset_descriptor.rows == 0)
-    {
-        cout << "No dataset packed available" << endl;
-        return;
-    }
-
-    if (blocks < 1)
-    {
-        cout << "Please specified at least one block map" << endl;
-        return;
-    }
-
-    size_t data_size = dataset_descriptor.rows;
-
-    // Initialize block map
-    vector< vector<size_t> > block_map;
-    for (int block_id = 0; block_id < blocks; block_id++)
-    {
-        vector<size_t> new_block_map;
-        new_block_map.push_back(block_id);
-        block_map.push_back(new_block_map);
-    }
-
-    // Continue push block with its new lut
-    for (size_t data_idx = blocks; data_idx < data_size; data_idx++)
-        block_map[data_idx % blocks].push_back(data_idx);
-
-    // Write feature map
-    for (int block_id = 0; block_id < blocks; block_id++)
-    {
-        stringstream data_path;
-        data_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/feature_map_" << block_id;
-        SaveFeatureMap(block_map[block_id], data_path.str());
-
-        percentout(block_id, blocks, 1);
-    }
-}
-
-void SaveFeatureMap(const vector<size_t>& block_map, const string& out)
-{
-    // Check directory
-    string dir_name = get_directory(out);
-    make_dir_available(dir_name);
-
-    ofstream OutFile (out.c_str(), ios::binary);
-    if (OutFile.is_open())
-    {
-        float* dataset_feature_vector_idx = dataset_descriptor.ptr();
-
-        // Write data dimension
-        size_t col_size_dataset = dataset_descriptor.cols;
-        OutFile.write(reinterpret_cast<char*>(&col_size_dataset), sizeof(col_size_dataset));
-
-        // Write data size
-        size_t data_size = block_map.size();
-        OutFile.write(reinterpret_cast<char*>(&data_size), sizeof(data_size));
-
-        // Write data
-        for (size_t data_idx = 0; data_idx < data_size; data_idx++)
-        {
-            for(size_t col = 0; col != col_size_dataset; col++)
-            {
-                float col_data = dataset_feature_vector_idx[block_map[data_idx] * col_size_dataset + col];
-                //cout << "block_map[data_idx] * col_size_dataset + col = " << block_map[data_idx] * col_size_dataset + col << endl;
-                //cout << "col_data = " << col_data << endl;
-                OutFile.write(reinterpret_cast<char*>(&col_data), sizeof(col_data));
-            }
-        }
-
-        // Close file
-        OutFile.close();
-    }
-}
-
-void ClusterReduce(int blocks)
-{
-    // Initialize job done list
-    vector<bool> job_done_list;
-    for (int job_idx = 0; job_idx < blocks; job_idx++)
-        job_done_list.push_back(false);
-
-    // Waiting result
-    cout << "Reducing Cluster..."; cout.flush();
-    startTime = CurrentPreciseTime();
-
-    stringstream sub_cluster_path;
-    bool all_done = false;
-    while (!all_done)
-    {
-        // Masking job is done
-        for (int job_idx = 0; job_idx < blocks; job_idx++)
-        {
-            sub_cluster_path.str("");
-            sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_idx;
-            if (!job_done_list[job_idx] && is_path_exist(sub_cluster_path.str()))
-            {
-                job_done_list[job_idx] = true;
-                //cout << "Block: " << job_idx << " ready!" << endl;
-                cout.flush();
-            }
-        }
-
-        // Job done result
-        all_done = true;
-        for (size_t job_idx = 0; job_idx < job_done_list.size(); job_idx++)
-            all_done &= job_done_list[job_idx];
-    }
-    cout << blocks << " block(s) "; cout.flush();
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-    // Load sub cluster
-    cout << "Loading sub-cluster..."; cout.flush();
-    startTime = CurrentPreciseTime();
-    LoadSubCluster(blocks);
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-    // Reducing cluster
-    cout << "Reducing cluster..."; cout.flush();
-    Clustering(true, false);
-}
-
-void LoadSubCluster(int blocks)
-{
-    stringstream sub_cluster_path;
-    size_t total_data_size = 0;
-    size_t col_size_dataset = 0;
-
-    // Calculate total cluster
-    for (int job_idx = 0; job_idx < blocks; job_idx++)
-    {
-        sub_cluster_path.str("");
-        sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_idx;
-
-        ifstream InFile (sub_cluster_path.str().c_str(), ios::binary);
-        if (InFile)
-        {
-            // Read data dimension
-            InFile.read((char*)(&col_size_dataset), sizeof(col_size_dataset));
-            //cout << "col_size_dataset: " << col_size_dataset << endl;
-
-            // Read data size
-            size_t data_size;
-            InFile.read((char*)(&data_size), sizeof(data_size));
-            //cout << "data_size: " << data_size << endl;
-            total_data_size += data_size;
-
-            InFile.close();
-        }
-    }
-
-    // Release and prepare memory
-    delete[] dataset_descriptor.ptr();
-
-    Matrix<float> read_feature_vector(new float[total_data_size * col_size_dataset], total_data_size, col_size_dataset);
-    float* read_feature_vector_idx = read_feature_vector.ptr();
-
-    // Read data
-    size_t accumulated_data_size = 0;
-    for (int job_idx = 0; job_idx < blocks; job_idx++)
-    {
-        sub_cluster_path.str("");
-        sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_idx;
-
-        // Read then append to dataset_feature_vector
-        ifstream InFile (sub_cluster_path.str().c_str(), ios::binary);
-        if (InFile)
-        {
-            // Read data dimension
-            size_t col_size_dataset;
-            InFile.read((char*)(&col_size_dataset), sizeof(col_size_dataset));
-            //cout << "col_size_dataset: " << col_size_dataset << endl;
-
-            // Read data size
-            size_t data_size;
-            InFile.read((char*)(&data_size), sizeof(data_size));
-            //cout << "data_size: " << data_size << endl;
-
-            // Read data
-            for (size_t data_idx = 0; data_idx != data_size; data_idx++)
-            {
-                for(size_t col = 0; col != col_size_dataset; col++)
-                {
-                    float read_col_data;
-                    InFile.read((char*)(&read_col_data), sizeof(read_col_data));
-                    read_feature_vector_idx[accumulated_data_size * col_size_dataset + data_idx * col_size_dataset + col] = read_col_data;
-                }
-            }
-            accumulated_data_size += data_size;
-
-            // Close file
-            InFile.close();
-        }
-    }
-    cout << "total " << accumulated_data_size << " clusters "; cout.flush();
-
-    // Set data
-    dataset_descriptor = read_feature_vector;
-}
-
-///=============== Slave ===============
-void ClusteringJobsTracker(int blocks, int cpu)
-{
-    // Tracking
-    int block_id = 0;
-    int job_done = 0;
-    vector<int> job_list;
-
-	cout << "Tracking sub cluster jobs..." << endl;
-    cout << "Reserved job: "; cout.flush();
-
-    int job_left = blocks;
-
-    // Spawn job while job_left > 0
-    while (job_left > 0)
-    {
-        stringstream sub_cluster_path;
-        stringstream data_path;
-        sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << block_id;
-        data_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/feature_map_" << block_id;
-
-        // Make job_list with un-finished block
-        // Check for un-finished sub-cluster
-        if (!is_path_exist(sub_cluster_path.str()))
-        {
-            // Check for clustering block
-            if (is_path_exist(data_path.str()) && !islock(data_path.str()))
-            {
-                lockfile(data_path.str());
-                job_list.push_back(block_id);
-                cout << block_id << ","; cout.flush();
-            }
-        }
-        else
-            job_done++;
-
-        // Next block
-        block_id++;
-
-        // Count job left
-        job_left = 0;
-        for (int job_id = 0; job_id < blocks; job_id++)
-        {
-            data_path.str("");
-            data_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/feature_map_" << job_id;
-            sub_cluster_path.str("");
-            sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_id;
-            if (!is_path_exist(sub_cluster_path.str()) && !islock(data_path.str()))
-                job_left++;
-        }
-
-        // Start spawn if enough job for cpu
-        if ((int)job_list.size() == cpu || job_left == 0)
-        {
-            // Spawn command
-            cout << endl << "Spawning tasks..." << endl;
-            startTime = CurrentPreciseTime();
-            SpawnClustering(job_list);
-            cout << "Spawn done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-            // Unlockfile
-            for (size_t job_idx = 0; job_idx < job_list.size(); job_idx++)
-            {
-                data_path.str("");
-                data_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/feature_map_" << job_list[job_idx];
-                unlockfile(data_path.str());
-            }
-            job_list.clear();
-
-        }
-    }
-
-    cout << "Sub-clustering done" << endl;
-}
-
-void SpawnClustering(const vector<int>& job_list)
-{
-    string ins_binary = "/home/stylix/webstylix/code/ins_offline/bin/Release/ins_offline";
-
-    stringstream cmd;
-    stringstream data_path;
-    stringstream sub_cluster_path;
-
-    // Spawn command
-    for (size_t job_idx = 0; job_idx < job_list.size(); job_idx++)
-    {
-        data_path.str("");
-        data_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/feature_map_" << job_list[job_idx];
-        sub_cluster_path.str("");
-        sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_list[job_idx];
-        cmd << "(" << ins_binary << " run spawnclustering prefix " << run_param.dataset_header << " input " << data_path.str() << " output " << sub_cluster_path.str() << " &);";
-    }
-
-    // Execute
-    //cout << cmd.str() << endl;
-    exec(cmd.str());
-
-    // Initialize job done list
-    vector<bool> job_done_list;
-    for (size_t job_idx = 0; job_idx < job_list.size(); job_idx++)
-        job_done_list.push_back(false);
-
-    // Waiting result
-    bool all_done = false;
-    while (!all_done)
-    {
-        // Masking job is done
-        for (size_t job_idx = 0; job_idx < job_list.size(); job_idx++)
-        {
-            sub_cluster_path.str("");
-            sub_cluster_path << run_param.database_root_dir << "/" << run_param.dataset_header << "/cluster_" << job_list[job_idx];
-            if (!job_done_list[job_idx] && is_path_exist(sub_cluster_path.str()))
-            {
-                job_done_list[job_idx] = true;
-                cout << "Block: " << job_list[job_idx] << " done!" << endl;
-                cout.flush();
-            }
-        }
-
-        // Job done result
-        all_done = true;
-        for (size_t job_idx = 0; job_idx < job_done_list.size(); job_idx++)
-            all_done &= job_done_list[job_idx];
-    }
-
-}
-
-void SubClustering(const string& prefix, const string& input, const string& output)
-{
-    cout << "Sub clustering..." << endl;
-    run_param.dataset_prefix = prefix;
-
-    cout << "Loading feature map..." << endl;
-    startTime = CurrentPreciseTime();
-    LoadFeatureMap(input);
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-    // Clustering
-    Clustering(true, false, true, output);
-}
-
-void LoadFeatureMap(const string& in)
-{
-    ifstream InFile (in.c_str(), ios::binary);
-    if (InFile)
-    {
-        // Read data dimension
-        size_t col_size_dataset;
-        InFile.read((char*)(&col_size_dataset), sizeof(col_size_dataset));
-        cout << "col_size_dataset: " << col_size_dataset << endl;
-
-        // Read data size
-        size_t data_size;
-        InFile.read((char*)(&data_size), sizeof(data_size));
-        cout << "data_size: " << data_size << endl;
-
-        // Release memory
-        delete[] dataset_descriptor.ptr();
-
-        Matrix<float> read_feature_vector(new float[data_size * col_size_dataset], data_size, col_size_dataset);
-        float* read_feature_vector_idx = read_feature_vector.ptr();
-
-        // Read data
-        size_t total_data = 0;
-        for (size_t data_idx = 0; data_idx != data_size; data_idx++)
-        {
-            for(size_t col = 0; col != col_size_dataset; col++)
-            {
-                float read_col_data;
-                InFile.read((char*)(&read_col_data), sizeof(read_col_data));
-                read_feature_vector_idx[data_idx * col_size_dataset + col] = read_col_data;
-                total_data++;
-            }
-        }
-        cout << "total_data: " << total_data << endl;
-
-        // Set data
-        dataset_descriptor = read_feature_vector;
-
-        // Close file
-        InFile.close();
-    }
 }
 
 void Clustering(bool save_cluster, bool hdf5, bool runspawn, const string& out)
@@ -1489,9 +1052,9 @@ void DatasetQuantization(bool save_quantized)
         size_t current_feature_amount = 0;
         size_t dimension = dataset_descriptor.cols;
         float* dataset_feature_idx = dataset_descriptor.ptr();
-        for (size_t dataset_id = 0; dataset_id < dataset_feature_count.size(); dataset_id++)
+        for (size_t dataset_id = 0; dataset_id < feature_count_per_pool.size(); dataset_id++)
         {
-            current_feature_amount = dataset_feature_count[dataset_id];
+            current_feature_amount = feature_count_per_pool[dataset_id];
             // Prepare feature vector to be quantized
             float* current_feature = new float[current_feature_amount * dimension];
             for (size_t row = 0; row < current_feature_amount; row++)
@@ -1538,7 +1101,7 @@ void DatasetQuantization(bool save_quantized)
                 dataset_quantized_dists.push_back(result_dist_vector);
             }
 
-            percentout(dataset_id, dataset_feature_count.size(), 1);
+            percentout(dataset_id, feature_count_per_pool.size(), 1);
 
             // Release memory
             delete[] feature_data.ptr();
@@ -1731,7 +1294,7 @@ void Bow(bool save_bow)
             // Set bow
             // Add feature to curr_sparse_bow at cluster_id
             // Frequency of bow is curr_sparse_bow[].size()
-            current_kp_amount = dataset_feature_count[dataset_id];
+            current_kp_amount = feature_count_per_pool[dataset_id];
             for (size_t feature_id = 0; feature_id < dataset_quantized_indices[dataset_id].size(); feature_id++)
             {
                 // Get cluster from quantizad index of feature

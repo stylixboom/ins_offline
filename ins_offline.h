@@ -40,20 +40,17 @@ using namespace ins;
 ins_param run_param;
 //-- Dataset list
 vector<string> ImgParentPaths;
-vector<int> ImgPoolLevels;
-vector<int> ImgListsPoolIds;
+vector<int> ImgListsPoolIds;            // To keep track of image_id to pool_id
 vector<size_t> ImgParentsIdx;
 vector<string> ImgLists;
 //-- Dataset feature
 Matrix<float> dataset_keypoint;         // all keypoint
 Matrix<float> dataset_descriptor;       // all feature descriptor
-vector<int> dataset_feature_count;      // number of features per dataset
+vector<int> feature_count_per_pool;     // number of features per pool
+vector<int> feature_count_per_image;     // number of features per image
 //-- Dataset cluster
 Matrix<float> cluster;
 int actual_cluster_amount;
-//-- Parallel clustering, clustering params
-int PARALLEL_BLOCKS;
-int PARALLEL_CPU;
 //-- Dataset quantized result
 vector< vector<int> > dataset_quantized_indices;
 vector< vector<float> > dataset_quantized_dists;
@@ -68,15 +65,6 @@ void LoadDatasetList(const string& in);
 void ProcessDataset();
 void ExtractDataset(bool save_feature);
 void LoadFeature();
-void ParallelClustering(int blocks);                                                        // [Master] Parallel clustering using MapReduce + Spawn style
-    void FeatureMap(int blocks);                                                            // [Master] Map
-        void SaveFeatureMap(const vector<size_t>& block_map, const string& out);            // [Master] Save map
-    void ClusterReduce(int blocks);                                                         // [Master] Waiting for sub clusters
-        void LoadSubCluster(int blocks);                                                    // [Master] Load sub cluster
-void ClusteringJobsTracker(int blocks, int cpu);                                            // [Slave] Clustering Job tracker
-    void SpawnClustering(const vector<int>& job_list);                                      // [Slave] Spawn cmd
-        void SubClustering(const string& prefix, const string& input, const string& output);// [Slave] Sub-clustering
-        void LoadFeatureMap(const string& in);                                              // [Slave] Load map
 void Clustering(bool save_cluster, bool hdf5=true, bool runspawn=false, const string& out="");
 void SaveCluster(const string& out);
 void LoadCluster(const string& in);
