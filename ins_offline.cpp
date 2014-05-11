@@ -55,6 +55,9 @@ int main(int argc,char *argv[])
             bool save_cluster = true;
             bool save_quantized = true;
             bool save_bow = true;
+            char pack_opt;
+            bool by_block = false;
+            size_t image_size = 100;
             switch (menu)
             {
             case 'l':
@@ -69,13 +72,21 @@ int main(int argc,char *argv[])
                 ExtractDataset(save_feature);
                 break;
             case 'f':
-                LoadFeature();
+                cout << "Do you want to pack by block? [y|n] : "; cout.flush();
+                cin >> pack_opt;
+                if (pack_opt == 'y')
+                {
+                    by_block = true;
+                    cout << "Block size (number of images) : "; cout.flush();
+                    cin >> image_size;
+                }
+                PackFeature(by_block, image_size);
                 break;
             case 'c':
                 Clustering(save_cluster);
                 break;
             case 'v':
-                DatasetQuantization(save_quantized);
+                ImageFeaturesQuantization(save_quantized);
                 break;
             case 'b':
                 Bow(save_bow);
@@ -521,7 +532,7 @@ void ExtractDataset(bool save_feature)
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 }
 
-void LoadFeature()
+void PackFeature(bool by_block, size_t block_size)
 {
     stringstream poolinfo_path;
     stringstream feature_keypoint_path;
@@ -536,32 +547,121 @@ void LoadFeature()
     feature_count_per_pool.clear();
 
     // Feature space
-    size_t row_size_dataset = 0;    // dataset size
-    size_t col_size_dataset = 0;    // dataset dimension
-    size_t col_kp_size = 0;         // keypoint dimension
+    int row_size_dataset = 0;    // dataset size
+    int col_size_dataset = 0;    // dataset dimension
+    int col_kp_size = 0;         // keypoint dimension
 
     float* kp_dat;      // keypoint data
     float* desc_dat;    // descriptor data
 
-    // if never pack feature
-    if (!is_path_exist(poolinfo_path.str()))
+    /// Load each image features
+    // Checking image avalibality
+    if (ImgLists.size() == 0)
     {
-        /// Load each image features
-        // Checking image avalibality
-        if (ImgLists.size() == 0)
+        cout << "No image available" << endl;
+        return;
+    }
+
+    // ======== Loading dataset feature ========
+    // SIFT extractor, loader
+    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift);
+    col_kp_size = sifthesaff_dataset.GetSIFTHeadSize();
+    col_size_dataset = sifthesaff_dataset.GetSIFTD();
+
+    //==== Calculating feature size and pooling info
+    cout << "Calculating dataset feature size..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+    for (size_t img_idx = 0; img_idx < ImgLists.size(); img_idx++)
+    {
+        //==== Path preparing
+        stringstream curr_img_parent;
+        stringstream curr_img_export_parent;
+        stringstream curr_img_pre;
+        //stringstream curr_img_path;
+        stringstream curr_img_export_path;
+        /*if (run_param.dataset_preset_index == 0) // chars74k
+            curr_img_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_tmp") << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        else*/
+            curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        /*if (run_param.dataset_preset_index == 0) // chars74k
+            curr_img_pre << str_replace_first(ImgLists[img_idx], ".png", "-edge-pre.png");
+        else*/
+            curr_img_pre << ImgLists[img_idx];
+        //curr_img_path << curr_img_parent.str() << "/" << curr_img_pre.str();
+        curr_img_export_path << curr_img_export_parent.str() << "/" << curr_img_pre.str() << ".sifthesaff";
+
+        // Check existing
+        if (is_path_exist(curr_img_export_path.str()))
         {
-            cout << "No image available" << endl;
-            return;
+            /// Loading features header
+            int num_kp = sifthesaff_dataset.checkNumKp(curr_img_export_path.str(), true);
+
+            /// Feature pooling
+            if ((int)feature_count_per_pool.size() < ImgListsPoolIds[img_idx] + 1)
+                feature_count_per_pool.push_back(0);
+            feature_count_per_pool[ImgListsPoolIds[img_idx]] += num_kp; // Accumulating feature count in the pool
+            feature_count_per_image.push_back(num_kp);                  // Keep feature for each image
+
+            row_size_dataset += num_kp;
         }
+        // Not exist
+        else
+        {
+            cout << "Feature \"" << curr_img_export_path.str() << "\" does not exist!" << endl;
+            exit(1);
+        }
+        //cout << sifthesaff_dataset.num_kp << " key points" << endl;
 
-        // ======== Loading dataset feature ========
-        // SIFT extractor, loader
-        SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift);
-        col_kp_size = sifthesaff_dataset.GetSIFTHeadSize();
-        col_size_dataset = sifthesaff_dataset.GetSIFTD();
+        percentout(img_idx, ImgLists.size(), 1);
 
-        //==== Calculating feature size and pooling info
-        cout << "Calculating dataset feature size..";
+        // Sampling
+        //img_idx += 5;
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    //==== Save feature pooling data
+    cout << "Saving pooling info..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+    ofstream PoolFile (poolinfo_path.str().c_str(), ios::binary);
+    if (PoolFile.is_open())
+    {
+        // Write pool_size
+        size_t pool_size = feature_count_per_pool.size();
+        PoolFile.write(reinterpret_cast<char*>(&pool_size), sizeof(pool_size));
+
+        // Write feature_count_per_pool
+        PoolFile.write(reinterpret_cast<char*>(&feature_count_per_pool[0]), feature_count_per_pool.size() * sizeof(feature_count_per_pool[0]));
+
+        // Write dataset_size
+        size_t dataset_size = feature_count_per_image.size();
+        PoolFile.write(reinterpret_cast<char*>(&dataset_size), sizeof(dataset_size));
+
+        // Write pool
+        PoolFile.write(reinterpret_cast<char*>(&feature_count_per_image[0]), feature_count_per_image.size() * sizeof(feature_count_per_image[0]));
+
+        // Close file
+        PoolFile.close();
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    /// Packing
+    if (by_block)
+    {
+        bool did_write = false;
+        ///======== Loading and writing features to hdf5 block-by-block ========
+        //==== Packing keypoint and descriptor
+        size_t pack_rowDone = 0;
+        size_t current_feature_count = 0;
+        // Accumulating features per block
+        for (size_t block_img_idx = 0, block_left = block_size; block_left > 0 && block_img_idx < ImgLists.size(); block_img_idx++, block_left--)
+            current_feature_count += feature_count_per_image[block_img_idx];
+        kp_dat = new float[current_feature_count * col_kp_size];
+        desc_dat = new float[current_feature_count * col_size_dataset];
+
+        cout << "Packing dataset keypoint and descriptor..";
         cout.flush();
         startTime = CurrentPreciseTime();
         for (size_t img_idx = 0; img_idx < ImgLists.size(); img_idx++)
@@ -570,33 +670,43 @@ void LoadFeature()
             stringstream curr_img_parent;
             stringstream curr_img_export_parent;
             stringstream curr_img_pre;
-            //stringstream curr_img_path;
             stringstream curr_img_export_path;
-            /*if (run_param.dataset_preset_index == 0) // chars74k
-                curr_img_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_tmp") << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
-            else*/
-                curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+            curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
             curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
-            /*if (run_param.dataset_preset_index == 0) // chars74k
-                curr_img_pre << str_replace_first(ImgLists[img_idx], ".png", "-edge-pre.png");
-            else*/
-                curr_img_pre << ImgLists[img_idx];
-            //curr_img_path << curr_img_parent.str() << "/" << curr_img_pre.str();
+            curr_img_pre << ImgLists[img_idx];
             curr_img_export_path << curr_img_export_parent.str() << "/" << curr_img_pre.str() << ".sifthesaff";
+
+            cout << curr_img_export_path.str() << endl;
 
             // Check existing
             if (is_path_exist(curr_img_export_path.str()))
             {
-                /// Loading features header
-                int num_kp = sifthesaff_dataset.checkNumKp(curr_img_export_path.str(), true);
+                /// Loading features
+                sifthesaff_dataset.importKeypoints(curr_img_export_path.str(), true);
 
-                /// Feature pooling
-                if ((int)feature_count_per_pool.size() < ImgListsPoolIds[img_idx] + 1)
-                    feature_count_per_pool.push_back(0);
-                feature_count_per_pool[ImgListsPoolIds[img_idx]] += num_kp; // Accumulating feature count in the pool
-                feature_count_per_image.push_back(num_kp);                  // Keep feature for each image
+                /// Packing feature
+                int currRow_size = sifthesaff_dataset.num_kp;
 
-                row_size_dataset += num_kp;
+                // Debug
+                if (currRow_size != feature_count_per_image[img_idx])
+                {
+                    cout << "ERROR!! currRow_size != feature_count_per_image[img_idx] " << currRow_size << " != " << feature_count_per_image[img_idx] << endl;
+                    exit(0);
+                }
+
+                for(int row = 0; row != currRow_size; row++)
+                {
+                    //desc_dat[prevDescBlock + currDesc + currCell]
+
+                    //== keypoint
+                    for(int col = 0; col != col_kp_size; col++)
+                        kp_dat[pack_rowDone * col_kp_size + row * col_kp_size + col] = sifthesaff_dataset.kp[row][col];
+
+                    //== descriptor
+                    for(int col = 0; col != col_size_dataset; col++)
+                        desc_dat[pack_rowDone * col_size_dataset + row * col_size_dataset + col] = sifthesaff_dataset.desc[row][col];
+                }
+                pack_rowDone += currRow_size;
             }
             // Not exist
             else
@@ -604,7 +714,33 @@ void LoadFeature()
                 cout << "Feature \"" << curr_img_export_path.str() << "\" does not exist!" << endl;
                 exit(1);
             }
-            //cout << sifthesaff_dataset.num_kp << " key points" << endl;
+
+            /// Flushing out to HDF5 file if this block is full, or until the last image.
+            if ((img_idx + 1) % block_size == 0 || img_idx == ImgLists.size() - 1)
+            {
+                cout << "Saving to HDF5 format..";
+                cout.flush();
+                startTime = CurrentPreciseTime();
+                cout << "keypoint..";
+                cout.flush();
+                HDF_write_append_2DFLOAT(feature_keypoint_path.str(), did_write, "keypoint", kp_dat, current_feature_count, col_kp_size);
+                cout << "descriptor..";
+                cout.flush();
+                HDF_write_append_2DFLOAT(feature_descriptor_path.str(), did_write, "descriptor", desc_dat, current_feature_count, col_size_dataset);
+                cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+                pack_rowDone = 0;
+                current_feature_count = 0;
+                // Accumulating features per block
+                for (size_t block_img_idx = img_idx, block_left = block_size; block_left > 0 && block_img_idx < ImgLists.size(); block_img_idx++, block_left--)
+                    current_feature_count += feature_count_per_image[block_img_idx];
+                delete[] kp_dat;
+                delete[] desc_dat;
+                kp_dat = new float[current_feature_count * col_kp_size];
+                desc_dat = new float[current_feature_count * col_size_dataset];
+
+                did_write = true;
+            }
 
             percentout(img_idx, ImgLists.size(), 1);
 
@@ -612,34 +748,10 @@ void LoadFeature()
             //img_idx += 5;
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        //==== Save feature pooling data
-        cout << "Saving pooling info..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        ofstream PoolFile (poolinfo_path.str().c_str(), ios::binary);
-        if (PoolFile.is_open())
-        {
-            // Write pool_size
-            size_t pool_size = feature_count_per_pool.size();
-            PoolFile.write(reinterpret_cast<char*>(&pool_size), sizeof(pool_size));
-
-            // Write feature_count_per_pool
-            PoolFile.write(reinterpret_cast<char*>(&feature_count_per_pool[0]), feature_count_per_pool.size() * sizeof(feature_count_per_pool[0]));
-
-            // Write dataset_size
-            size_t dataset_size = feature_count_per_image.size();
-            PoolFile.write(reinterpret_cast<char*>(&dataset_size), sizeof(dataset_size));
-
-            // Write pool
-            PoolFile.write(reinterpret_cast<char*>(&feature_count_per_image[0]), feature_count_per_image.size() * sizeof(feature_count_per_image[0]));
-
-            // Close file
-            PoolFile.close();
-        }
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        //==== Packing keypoint and descriptor
+    }
+    else
+    {
+        ///======== Loading all features then writing to HDF5 once ======== (not good for large dataset)
         size_t pack_rowDone = 0;
         kp_dat = new float[row_size_dataset * col_kp_size];
         desc_dat = new float[row_size_dataset * col_size_dataset];
@@ -677,17 +789,17 @@ void LoadFeature()
                 sifthesaff_dataset.importKeypoints(curr_img_export_path.str(), true);
 
                 /// Packing feature
-                size_t currRow_size = sifthesaff_dataset.num_kp;
-                for(size_t row = 0; row != currRow_size; row++)
+                int currRow_size = sifthesaff_dataset.num_kp;
+                for(int row = 0; row != currRow_size; row++)
                 {
                     //desc_dat[prevDescBlock + currDesc + currCell]
 
                     //== keypoint
-                    for(size_t col = 0; col != col_kp_size; col++)
+                    for(int col = 0; col != col_kp_size; col++)
                         kp_dat[pack_rowDone * col_kp_size + row * col_kp_size + col] = sifthesaff_dataset.kp[row][col];
 
                     //== descriptor
-                    for(size_t col = 0; col != col_size_dataset; col++)
+                    for(int col = 0; col != col_size_dataset; col++)
                         desc_dat[pack_rowDone * col_size_dataset + row * col_size_dataset + col] = sifthesaff_dataset.desc[row][col];
                 }
                 pack_rowDone += currRow_size;
@@ -718,84 +830,24 @@ void LoadFeature()
         HDF_write_2DFLOAT(feature_descriptor_path.str(), "descriptor", desc_dat, row_size_dataset, col_size_dataset);
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
-    // Load feature keypoint and feature descriptor from hdf5 file
-    else
-    {
-        cout << "Loading pooling info..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        ifstream PoolFile (poolinfo_path.str().c_str(), ios::binary);
-        if (PoolFile)
-        {
-            // Read pool_size
-            size_t pool_size;
-            PoolFile.read((char*)(&pool_size), sizeof(pool_size));
 
-            // Read feature_count_per_pool
-            for (size_t pool_idx = 0; pool_idx < pool_size; pool_idx++)
-            {
-                int feature_count;
-                PoolFile.read((char*)(&feature_count), sizeof(feature_count));
-                feature_count_per_pool.push_back(feature_count);
-            }
-
-            // Read dataset_size
-            size_t dataset_size;
-            PoolFile.read((char*)(&dataset_size), sizeof(dataset_size));
-
-            // Read feature_count_per_image
-            for (size_t dataset_idx = 0; dataset_idx < dataset_size; dataset_idx++)
-            {
-                int feature_count;
-                PoolFile.read((char*)(&feature_count), sizeof(feature_count));
-                feature_count_per_image.push_back(feature_count);
-            }
-
-            // Close file
-            PoolFile.close();
-        }
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        kp_dat = NULL;
-        desc_dat = NULL;
-
-        cout << "Loading feature keypoint..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        HDF_read_2DFLOAT(feature_keypoint_path.str(), "keypoint", kp_dat, row_size_dataset, col_kp_size);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-
-        cout << "Loading feature descriptor..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        HDF_read_2DFLOAT(feature_descriptor_path.str(), "descriptor", desc_dat, row_size_dataset, col_size_dataset);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-    }
 
     cout << "Dataset contains " << ImgListsPoolIds[ImgListsPoolIds.size() - 1] + 1 << " pool(s) of image" << endl;
     cout << "Total " << row_size_dataset << " keypoint(s)" << endl;
-
-	// Wrap descriptor and keypoint to matrix for flann knn search
-	Matrix<float> ret_keypoint(kp_dat, row_size_dataset, col_kp_size);
-	Matrix<float> ret_feature_vector(desc_dat, row_size_dataset, col_size_dataset);
-
-    // Keep dataset pack
-    dataset_keypoint = ret_keypoint;
-	dataset_descriptor = ret_feature_vector;
 }
 
-void Clustering(bool save_cluster, bool hdf5, bool runspawn, const string& out)
+void LoadFeature(size_t load_size, float *&kp, float *&desc)
+{
+    // To be implemented
+}
+
+void Clustering(bool save_cluster, bool hdf5)
 {
     // Release memory
     delete[] cluster.ptr();
     actual_cluster_amount = 0;
 
     string cluster_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/cluster";
-
-    // Switch cluster output path to spawn out
-    if (runspawn)
-        cluster_path = out;
 
     // Check existing cluster
     if (!is_path_exist(cluster_path))
@@ -974,7 +1026,7 @@ void LoadCluster(const string& in)
     actual_cluster_amount = cluster_amount;
 }
 
-void DatasetQuantization(bool save_quantized)
+void ImageFeaturesQuantization(bool save_quantized)
 {
     string dataset_quantized_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/quantized";
     string search_index_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/searchindex";
@@ -1039,22 +1091,23 @@ void DatasetQuantization(bool save_quantized)
         SearchParams sparams = SearchParams();
         //sparams.checks = FLANN_CHECKS_AUTOTUNED;
         //sparams.checks = FLANN_CHECKS_UNLIMITED; // for only one tree
-        sparams.checks = 512;
-        sparams.cores = run_param.MAXCPU;
-        size_t knn = 1;
+        sparams.checks = 512;               // Higher is better, also slower
+        sparams.cores = run_param.MAXCPU;   // Take max CPU cores to run
+        size_t knn = 1;                     // For hard assignment
 
         cout << "KNN searching..";
         cout.flush();
         startTime = CurrentPreciseTime();
 
-        // Feature vector per dataset preparation
+        /// Per image vector quantization
+        // Feature vector per image preparation
         size_t accumulative_feature_amount = 0;
         size_t current_feature_amount = 0;
         size_t dimension = dataset_descriptor.cols;
         float* dataset_feature_idx = dataset_descriptor.ptr();
-        for (size_t dataset_id = 0; dataset_id < feature_count_per_pool.size(); dataset_id++)
+        for (size_t dataset_id = 0; dataset_id < feature_count_per_image.size(); dataset_id++)
         {
-            current_feature_amount = feature_count_per_pool[dataset_id];
+            current_feature_amount = feature_count_per_image[dataset_id];
             // Prepare feature vector to be quantized
             float* current_feature = new float[current_feature_amount * dimension];
             for (size_t row = 0; row < current_feature_amount; row++)
@@ -1101,7 +1154,7 @@ void DatasetQuantization(bool save_quantized)
                 dataset_quantized_dists.push_back(result_dist_vector);
             }
 
-            percentout(dataset_id, feature_count_per_pool.size(), 1);
+            percentout(dataset_id, feature_count_per_image.size(), 1);
 
             // Release memory
             delete[] feature_data.ptr();

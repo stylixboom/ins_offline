@@ -62,13 +62,14 @@ timespec startTime;
 void LoadDataset(const string& ImgPath);
 void SaveDatasetList(const string& out);
 void LoadDatasetList(const string& in);
-void ProcessDataset();
+void ProcessDataset();                      // Not necessary, this is for pre-processing image
 void ExtractDataset(bool save_feature);
-void LoadFeature();
-void Clustering(bool save_cluster, bool hdf5=true, bool runspawn=false, const string& out="");
+void PackFeature(bool by_block, size_t block_size);
+void LoadFeature(size_t load_size, float *&kp, float *&desc);
+void Clustering(bool save_cluster, bool hdf5 = true);
 void SaveCluster(const string& out);
 void LoadCluster(const string& in);
-void DatasetQuantization(bool save_feature);
+void ImageFeaturesQuantization(bool save_feature);
 void SaveQuantizedDataset(const string& out);
 void LoadQuantizedDataset(const string& in);
 void Bow(bool save_feature);
