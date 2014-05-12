@@ -65,11 +65,13 @@ void LoadDatasetList(const string& in);
 void ProcessDataset();                      // Not necessary, this is for pre-processing image
 void ExtractDataset(bool save_feature);
 void PackFeature(bool by_block, size_t block_size);
-void LoadFeature(size_t load_size, float *&kp, float *&desc);
+void LoadFeature(size_t start_idx, size_t load_size, bool enable_kp = false);
+void SavePoolinfo(const string& out);
+void LoadPoolinfo(const string& in);
 void Clustering(bool save_cluster, bool hdf5 = true);
 void SaveCluster(const string& out);
 void LoadCluster(const string& in);
-void ImageFeaturesQuantization(bool save_feature);
+void ImageFeaturesQuantization(bool save_quantized);
 void SaveQuantizedDataset(const string& out);
 void LoadQuantizedDataset(const string& in);
 void Bow(bool save_feature);
