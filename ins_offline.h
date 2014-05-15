@@ -68,6 +68,7 @@ void PackFeature(bool by_block, size_t block_size);
 void LoadFeature(size_t start_idx, size_t load_size, bool enable_kp = false);
 void SavePoolinfo(const string& out);
 void LoadPoolinfo(const string& in);
+string SamplingDatabase(int sample_size, int dimension);
 void Clustering(bool save_cluster, bool hdf5 = true);
 void SaveCluster(const string& out);
 void LoadCluster(const string& in);

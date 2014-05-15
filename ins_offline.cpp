@@ -477,26 +477,17 @@ void ExtractDataset(bool save_feature)
         toggle_skip = !toggle_skip;*/
 
         stringstream curr_img_parent;
-        stringstream curr_img_export_parent;
-        stringstream curr_img_pre;
         stringstream curr_img_path;
+        stringstream curr_img_export_parent;
         stringstream curr_img_export_path;
-        /*if (run_param.dataset_preset_index == 0) // chars74k
-            curr_img_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_tmp") << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
-        else*/
-            curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        curr_img_path << curr_img_parent.str() << "/" << ImgLists[img_idx];
         curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
-        /*if (run_param.dataset_preset_index == 0) // chars74k
-            curr_img_pre << str_replace_first(ImgLists[img_idx], ".png", "-edge-pre.png");
-        else*/
-            curr_img_pre << ImgLists[img_idx];
-        curr_img_path << curr_img_parent.str() << "/" << curr_img_pre.str();
-        curr_img_export_path << curr_img_export_parent.str() << "/" << curr_img_pre.str() << ".sifthesaff";
+        curr_img_export_path << curr_img_export_parent.str() << "/" << ImgLists[img_idx] << ".sifthesaff";
 
 
         /// Parallel feature extraction can be done here
 
-        //cout << curr_img_pre.str() << " ... "; cout.flush();
         // Check existing, no extracting if exist
         //if (start_ls2null)
             //ls2null(curr_img_export_path.str());
@@ -557,7 +548,8 @@ void PackFeature(bool by_block, size_t block_size)
 
     // ======== Loading dataset feature ========
     // SIFT extractor, loader
-    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift);
+    bool check_sift_exist = true;  // Turn off for gaining a little speed
+    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, check_sift_exist);
     col_kp_size = sifthesaff_dataset.GetSIFTHeadSize();
     col_size_dataset = sifthesaff_dataset.GetSIFTD();
 
@@ -657,7 +649,8 @@ void PackFeature(bool by_block, size_t block_size)
             // Debug
             if (currRow_size != feature_count_per_image[img_idx])
             {
-                cout << "ERROR!! currRow_size != feature_count_per_image[img_idx] " << currRow_size << " != " << feature_count_per_image[img_idx] << endl;
+                cout << "ERROR!! currRow_size != feature_count_per_image[img_idx]" << endl;
+                cout << "currRow_size:" << currRow_size << " img_idx:" << img_idx << " feature_count_per_image[img_idx]:" << feature_count_per_image[img_idx] << endl;
                 exit(0);
             }
 
@@ -812,14 +805,23 @@ void LoadFeature(size_t start_idx, size_t load_size, bool enable_kp)
         float* kp_dat;      // keypoint data
         //kp_dat = NULL;
 
-        cout << "Loading feature keypoint..";
+        /*cout << "Loading feature keypoint..";
         cout.flush();
-        startTime = CurrentPreciseTime();
+        startTime = CurrentPreciseTime();*/
         HDF_read_row_2DFLOAT(feature_keypoint_path, "keypoint", kp_dat, start_idx, load_size);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
+        /*cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+        */
         // Wrap keypoint to matrix for flann knn search
         Matrix<float> ret_keypoint(kp_dat, load_size, col_kp_size);
+
+        /*
+        cout << "kp [" << load_size << "," << 5 << "]" << endl;
+        for (size_t row = 0; row < load_size; row++)
+        {
+            for (size_t col = 0; col < 5; col++)
+                cout << kp_dat[row * 5 + col] << " ";
+            cout << endl;
+        }*/
 
         // Keep dataset pack
         dataset_keypoint = ret_keypoint;
@@ -832,11 +834,12 @@ void LoadFeature(size_t start_idx, size_t load_size, bool enable_kp)
     float* desc_dat;    // descriptor data
     //desc_dat = NULL;
 
-    cout << "Loading feature descriptor..";
+    /*cout << "Loading feature descriptor..";
     cout.flush();
-    startTime = CurrentPreciseTime();
+    startTime = CurrentPreciseTime();*/
     HDF_read_row_2DFLOAT(feature_descriptor_path, "descriptor", desc_dat, start_idx, load_size);
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+    /*cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+    */
 
     // Wrap descriptor to matrix for flann knn search
 	Matrix<float> ret_feature_vector(desc_dat, load_size, col_size_dataset);
@@ -882,6 +885,10 @@ void LoadPoolinfo(const string& in)
     ifstream PoolFile (in.c_str(), ios::binary);
     if (PoolFile)
     {
+        // Consistency check
+        int pool_features = 0;
+        int img_features = 0;
+
         // Clear existing
         feature_count_per_pool.clear();
         feature_count_per_image.clear();
@@ -896,6 +903,7 @@ void LoadPoolinfo(const string& in)
             int feature_count;
             PoolFile.read((char*)(&feature_count), sizeof(feature_count));
             feature_count_per_pool.push_back(feature_count);
+            pool_features += feature_count;
         }
 
         // Read dataset_size
@@ -908,12 +916,121 @@ void LoadPoolinfo(const string& in)
             int feature_count;
             PoolFile.read((char*)(&feature_count), sizeof(feature_count));
             feature_count_per_image.push_back(feature_count);
+
+            img_features += feature_count;
+
+            /*
+            if (feature_count == -1)
+            {
+                // Image
+                stringstream curr_img_parent;
+                stringstream curr_img_path;
+                curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[dataset_idx]];
+                curr_img_path << curr_img_parent.str() << "/" << ImgLists[dataset_idx];
+
+                // SIFT path
+                stringstream curr_img_export_parent;
+                stringstream curr_img_export_path;
+                curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[dataset_idx]];
+                curr_img_export_path << curr_img_export_parent.str() << "/" << ImgLists[dataset_idx] << ".sifthesaff";
+
+                string cmd = "/home/stylix/webstylix/code/lib/sifthesaff/bin/Release/sifthesaff_extractor -in " + curr_img_path.str() + " -out " + curr_img_export_path.str() + " -m b" << endl;
+                //cout << curr_img_path.str() << endl;
+                //cout << curr_img_export_path.str() << endl;
+                cout << "Launch emergency database repair!!" << endl;
+                cout << "cmd: " << cmd;
+                exec(cmd);
+            }
+            */
         }
 
         // Close file
         PoolFile.close();
+
+        if (pool_features != img_features)
+        {
+            cout << "Wrong poolinfo!! pool_features != img_features [ " << pool_features << " != " << img_features << "] " << endl;
+            exit(-1);
+        }
     }
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+}
+
+string SamplingDatabase(int sample_size, int dimension)
+{
+    size_t total_image = feature_count_per_image.size();
+
+    string feature_descriptor_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/feature_descriptor";
+    string feature_descriptor_sample_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/feature_descriptor_img-" + toString(sample_size);
+
+    bool* sampling_mask = new bool[total_image]();  // Zero initialize
+
+    // Randomize
+    cout << "Randomize image..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+    for (int sample_count = 0; sample_count < sample_size;)
+    {
+        size_t rand_img_id = random() % total_image;
+
+        // Check this image has features more than zero
+        if (feature_count_per_image[rand_img_id] > 0)
+        {
+            sampling_mask[rand_img_id] = true;
+            sample_count++;
+
+            percentout(sample_count, sample_size);
+        }
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    // Sampling from HDF5 to HDF5 file
+    cout << "Sampling..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+    bool did_write = false;
+    size_t offset_feature_id = 0;
+    size_t current_feature_amount = 0;
+    size_t total_feature_amount = 0;
+    for (size_t img_id = 0; img_id < total_image; img_id++)
+    {
+        current_feature_amount = feature_count_per_image[img_id];
+
+        if (sampling_mask[img_id])
+        {
+            float* desc_dat = new float[current_feature_amount * dimension];
+
+            // Load from offset
+            HDF_read_row_2DFLOAT(feature_descriptor_path, "descriptor", desc_dat, offset_feature_id, current_feature_amount);
+
+            // Save append
+            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", desc_dat, current_feature_amount, dimension);
+            did_write = true;
+
+            // Accumulate total sampled features
+            total_feature_amount += current_feature_amount;
+
+            // Release memory
+            delete[] desc_dat;
+
+            percentout(img_id, total_image);
+        }
+
+        // Next offset
+        offset_feature_id += current_feature_amount;
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    cout << "Total features: " << offset_feature_id << endl;
+    cout << "Total sampled features: " << total_feature_amount << endl;
+
+    feature_descriptor_sample_path = feature_descriptor_sample_path + "_feature-" + toString(total_feature_amount);
+    exec("mv " + feature_descriptor_path + " " + feature_descriptor_sample_path);
+
+    // Release memory
+    delete[] sampling_mask;
+
+    return feature_descriptor_sample_path;
 }
 
 void Clustering(bool save_cluster, bool hdf5)
@@ -927,17 +1044,17 @@ void Clustering(bool save_cluster, bool hdf5)
     // Check existing cluster
     if (!is_path_exist(cluster_path))
     {
-        // Checking dataset packed avalibality
-        if (dataset_descriptor.cols == 0){
-            cout << "No dataset packed available" << endl;
-            return;
-        }
+        string poolinfo_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/poolinfo";
+
+        // Check existing poolinfo
+        if (feature_count_per_pool.size() == 0)
+            LoadPoolinfo(poolinfo_path);
 
         char choice;
         bool with_mpi = true;
         cout << "==== CLuster configuration ====" << endl;
         cout << "Cluster size: " << run_param.CLUSTER_SIZE << endl;
-        cout << "Dataset size: " << dataset_descriptor.rows << endl;
+        cout << "Dataset size: " << feature_count_per_image.size() << endl;
         cout << "Do you want to run with MPI? [y|n]:";
         cin >> choice;
         if (choice == 'n')
@@ -948,9 +1065,12 @@ void Clustering(bool save_cluster, bool hdf5)
         cout.flush();
         startTime = CurrentPreciseTime();
 
+        // SIFT detail
+        SIFThesaff sift_obj;
+
         // Cluster preparation
         int km_cluster_size = run_param.CLUSTER_SIZE;
-        int dimension = dataset_descriptor.cols;
+        int dimension = sift_obj.GetSIFTD();
         int km_iteration = 50;
 
         // Preparing empty cluster
@@ -961,6 +1081,18 @@ void Clustering(bool save_cluster, bool hdf5)
             string feature_descriptor_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/feature_descriptor";
             string vgg_fastcluster_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/vgg_fastcluster.py";
             string start_clustering_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/start_clustering.sh";
+
+            string opt;
+            int sample_size = feature_count_per_image.size();
+            cout << "Do you want to sampling images (recommend value = " << feature_count_per_image.size() / 35 << ") [n|sample_size] : "; cout.flush();
+            cin >> opt;
+            if (opt != "n")
+            {
+                sample_size = atoi(opt.c_str());
+
+                feature_descriptor_path = SamplingDatabase(sample_size, dimension);
+            }
+
 
             // Write vgg_fastcluster.py script
             /*
@@ -1400,8 +1532,24 @@ void Bow(bool save_bow)
         // Checking dataset keypoint avalibality
         if (dataset_keypoint.cols == 0)
         {
-            cout << "No dataset keypoint available" << endl;
-            return;
+            cout << "Feature keypoint not loaded! Loading..";
+            cout.flush();
+            startTime = CurrentPreciseTime();
+
+            // Release memory
+            delete[] dataset_keypoint.ptr();
+
+            // Read whole keypoints data
+            string feature_keypoint_path = run_param.database_root_dir + "/" + run_param.dataset_header + "/feature_keypoint";
+            size_t row, col;
+            float* kp_dat;
+            HDF_read_2DFLOAT(feature_keypoint_path, "keypoint", kp_dat, row, col);
+            Matrix<float> ret_keypoint(kp_dat, row, col);
+
+            // Save back keypoint
+            dataset_keypoint = ret_keypoint;
+
+            cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
         }
         // Checking quantized dataset avalibality
         if (dataset_quantized_indices.size() == 0)
@@ -1410,7 +1558,7 @@ void Bow(bool save_bow)
             return;
         }
 
-        // Bow gen
+        /// Building Bow
         cout << "Building Bow..";
         cout.flush();
         startTime = CurrentPreciseTime();
@@ -1418,12 +1566,13 @@ void Bow(bool save_bow)
         size_t current_kp_amount = 0;
         size_t dimension = dataset_keypoint.cols;
         float* dataset_keypoint_idx = dataset_keypoint.ptr();
+        /// For each image
         for (size_t dataset_id = 0; dataset_id < dataset_quantized_indices.size(); dataset_id++)
         {
-            // Initialize blank sparse bow
+            /// Initialize blank sparse bow
             unordered_map<size_t, vector<feature_object> > curr_sparse_bow; // sparse of feature
 
-            // Set bow
+            /// Set bow
             // Add feature to curr_sparse_bow at cluster_id
             // Frequency of bow is curr_sparse_bow[].size()
             current_kp_amount = feature_count_per_pool[dataset_id];
@@ -1435,11 +1584,12 @@ void Bow(bool save_bow)
                 // Create new feature object with feature_id and geo location, x,y,a,b,c
                 feature_object feature;
                 feature.feature_id = feature_id;
-                feature.x = dataset_keypoint_idx[(accumulative_kp_amount + feature_id) * dimension + 0];
-                feature.y = dataset_keypoint_idx[(accumulative_kp_amount + feature_id) * dimension + 1];
-                feature.a = dataset_keypoint_idx[(accumulative_kp_amount + feature_id) * dimension + 2];
-                feature.b = dataset_keypoint_idx[(accumulative_kp_amount + feature_id) * dimension + 3];
-                feature.c = dataset_keypoint_idx[(accumulative_kp_amount + feature_id) * dimension + 4];
+                size_t feature_mem_idx = (accumulative_kp_amount + feature_id) * dimension;
+                feature.x = dataset_keypoint_idx[feature_mem_idx + 0];
+                feature.y = dataset_keypoint_idx[feature_mem_idx + 1];
+                feature.a = dataset_keypoint_idx[feature_mem_idx + 2];
+                feature.b = dataset_keypoint_idx[feature_mem_idx + 3];
+                feature.c = dataset_keypoint_idx[feature_mem_idx + 4];
 
                 // Keep new feature into its corresponding bin (cluster_id)
                 curr_sparse_bow[cluster_id].push_back(feature);
