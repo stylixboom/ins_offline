@@ -13,16 +13,15 @@
 #include <string>
 #include <sys/time.h>
 #include <sstream>
-#include <tr1/unordered_map>
-#include <math.h>
+#include <unordered_map>
+#include <cmath>
 #include <algorithm> // sort
-#include <stdlib.h> // exit
+#include <cstdlib> // exit
 
 #include "../lib/alphautils/alphautils.h"
 #include "../lib/ins/invert_index.h"
 
 using namespace std;
-using namespace tr1;
 using namespace alphautils;
 using namespace ins;
 
@@ -81,9 +80,9 @@ int main(int argc,char *argv[])
                 InFile.read((char*)(&(read_bin.cluster_id)), sizeof(read_bin.cluster_id));
                 curr_offset += sizeof(read_bin.cluster_id);
 
-                // Frequency
-                InFile.read((char*)(&(read_bin.freq)), sizeof(read_bin.freq));
-                curr_offset += sizeof(read_bin.freq);
+                // Weight
+                InFile.read((char*)(&(read_bin.weight)), sizeof(read_bin.weight));
+                curr_offset += sizeof(read_bin.weight);
 
                 // Feature count
                 size_t feature_count;
