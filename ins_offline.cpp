@@ -21,7 +21,7 @@ int main(int argc,char *argv[])
         if (argc%2 == 0)
         {
             cout << "Command is invalid! It must be in a form of key value pair." << endl;
-            exit(1);
+            //exit(1);
         }
 
         // Grab all params
@@ -428,14 +428,8 @@ void ExtractDataset(bool save_feature)
         return;
     }
 
-    // ======== Extracting dataset feature ========
-    cout << "Extracting dataset..";
-    cout.flush();
-    startTime = CurrentPreciseTime();
-
-    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift); // color, normalize, rootsift
-
-    /* use with really good i/o, for network disk is not good enough
+    /*// Parallel feature extraction
+    // use with really good i/o, for network disk is not good enough
     int total_machine = 1;
     int machine_no = 0;
     char empty_char;
@@ -454,23 +448,32 @@ void ExtractDataset(bool save_feature)
     cout << "Do you want to skip file until [n|filename]: "; cout.flush();
     string skip_to_file;
     cin >> skip_to_file;
-    size_t skip_id = 0;
+    size_t resume_id = 0;
     if (skip_to_file != "n")
     {
-        for (skip_id = 0; skip_id < ImgLists.size(); skip_id++)
+        for (resume_id = 0; resume_id < ImgLists.size(); resume_id++)
         {
-            if (ImgLists[skip_id] == skip_to_file)
+            if (ImgLists[resume_id] == skip_to_file)
                 break;
         }
+        // To start at the next file
+        resume_id++;
     }
 
-    // use with really good i/o, for network disk is not good enough
-    //skip_id += machine_no;
+    /*// use with really good i/o, for network disk is not good enough
+    resume_id += machine_no;*/
+
+    // ======== Extracting dataset feature ========
+    cout << "Extracting dataset..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+
+    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift); // color, normalize, rootsift
 
     //bool toggle_skip = false;
     //bool start_ls2null = false;
-    //for (size_t img_idx = skip_id + 1; img_idx < ImgLists.size(); img_idx += total_machine) // for network disk is not good enough
-    for (size_t img_idx = skip_id + 1; img_idx < ImgLists.size(); img_idx++)
+    //for (size_t img_idx = resume_id; img_idx < ImgLists.size(); img_idx += total_machine) // for network disk is not good enough
+    for (size_t img_idx = resume_id; img_idx < ImgLists.size(); img_idx++)
     {
         /*int skip_to_rand = 0;
         int max_skip = 32;
@@ -519,7 +522,8 @@ void ExtractDataset(bool save_feature)
                 img_idx -= 1;*/
         }
 
-        percentout(img_idx, ImgLists.size(), 1);
+        //percentout(img_idx, ImgLists.size(), 1);
+        percentout_timeleft(img_idx, resume_id, ImgLists.size(), startTime, 1);
 
         // Sampling
         //img_idx += 5;
@@ -551,8 +555,8 @@ void PackFeature(bool by_block, size_t block_size)
     // SIFT extractor, loader
     bool check_sift_exist = true;  // Turn off for gaining a little speed
     SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, check_sift_exist);
-    col_kp_size = sifthesaff_dataset.GetSIFTHeadSize();
-    col_size_dataset = sifthesaff_dataset.GetSIFTD();
+    col_kp_size = SIFThesaff::GetSIFTHeadSize();
+    col_size_dataset = SIFThesaff::GetSIFTD();
 
     // Check existing poolinfo
     if (!is_path_exist(run_param.poolinfo_path))  // Not exist, create new pool
@@ -581,7 +585,8 @@ void PackFeature(bool by_block, size_t block_size)
             row_size_dataset += num_kp;
             //cout << sifthesaff_dataset.num_kp << " key points" << endl;
 
-            percentout(img_idx, ImgLists.size(), 1);
+            //percentout(img_idx, ImgLists.size(), 1);
+            percentout_timeleft(img_idx, 0, ImgLists.size(), startTime, 20);
 
             // Sampling
             //img_idx += 5;
@@ -657,15 +662,11 @@ void PackFeature(bool by_block, size_t block_size)
 
             for(int row = 0; row < currRow_size; row++)
             {
-                //desc_dat[prevDescBlock + currDesc + currCell]
+                // Slowdown by copying here***
+
                 //== keypoint
-                //cout << "[" << currRow_size << "] ";
                 for(int col = 0; col < col_kp_size; col++)
-                {
-                    //cout << pack_rowDone * col_kp_size + row * col_kp_size + col << " ";
                     kp_dat[pack_rowDone * col_kp_size + row * col_kp_size + col] = sifthesaff_dataset.kp[row][col];
-                }
-                //cout << endl;
 
                 //== descriptor
                 for(int col = 0; col < col_size_dataset; col++)
@@ -714,7 +715,8 @@ void PackFeature(bool by_block, size_t block_size)
                 delete[] desc_dat;
             }
 
-            percentout(img_idx, ImgLists.size(), 1);
+            //percentout(img_idx, ImgLists.size(), 1);
+            percentout_timeleft(img_idx, 0, ImgLists.size(), startTime, 20);
 
             // Sampling
             //img_idx += 5;
@@ -763,7 +765,8 @@ void PackFeature(bool by_block, size_t block_size)
             pack_rowDone += currRow_size;
             //cout << sifthesaff_dataset.num_kp << " key points" << endl;
 
-            percentout(img_idx, ImgLists.size(), 1);
+            //percentout(img_idx, ImgLists.size(), 1);
+            percentout_timeleft(img_idx, 0, ImgLists.size(), startTime, 20);
 
             // Sampling
             //img_idx += 5;
@@ -790,17 +793,14 @@ void PackFeature(bool by_block, size_t block_size)
     cout << "Total " << row_size_dataset << " keypoint(s)" << endl;
 }
 
-void LoadFeature(size_t start_idx, size_t load_size, int load_mode)
+void LoadFeature(size_t start_idx, size_t load_size, int load_mode, Matrix<float>& load_data)
 {
     // Feature Header
-    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift);
-    int col_kp_size = sifthesaff_dataset.GetSIFTHeadSize();
-    int col_size_dataset = sifthesaff_dataset.GetSIFTD();
+    int col_kp_size = SIFThesaff::GetSIFTHeadSize();
+    int col_size_dataset = SIFThesaff::GetSIFTD();
 
-    if (load_mode == LOAD_KP || load_mode == LOAD_ALL)  // Load with keypoint
+    if (load_mode == LOAD_KP)  // Load with keypoint
     {
-        delete[] dataset_keypoint.ptr();
-
         float* kp_dat;      // keypoint data
         //kp_dat = NULL;
 
@@ -811,7 +811,7 @@ void LoadFeature(size_t start_idx, size_t load_size, int load_mode)
         /*cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
         */
         // Wrap keypoint to matrix for flann knn search
-        Matrix<float> ret_keypoint(kp_dat, load_size, col_kp_size);
+        load_data = Matrix<float>(kp_dat, load_size, col_kp_size);
 
         /*
         cout << "kp [" << load_size << "," << 5 << "]" << endl;
@@ -821,16 +821,10 @@ void LoadFeature(size_t start_idx, size_t load_size, int load_mode)
                 cout << kp_dat[row * 5 + col] << " ";
             cout << endl;
         }*/
-
-        // Keep dataset pack
-        swap(dataset_keypoint, ret_keypoint);
-        // dataset_keypoint = ret_keypoint; // may have issue on memory leak
     }
 
-    if (load_mode == LOAD_DESC || load_mode == LOAD_ALL)  // Load with desciptor
+    if (load_mode == LOAD_DESC)  // Load with desciptor
     {
-        delete[] dataset_descriptor.ptr();
-
         float* desc_dat;    // descriptor data
         //desc_dat = NULL;
 
@@ -842,11 +836,7 @@ void LoadFeature(size_t start_idx, size_t load_size, int load_mode)
         */
 
         // Wrap descriptor to matrix for flann knn search
-        Matrix<float> ret_feature_vector(desc_dat, load_size, col_size_dataset);
-
-        // Keep dataset pack
-        swap(dataset_descriptor, ret_feature_vector);
-        //dataset_descriptor = ret_feature_vector;  // may have issue on memory leak
+        load_data = Matrix<float>(desc_dat, load_size, col_size_dataset);
     }
 }
 
@@ -1022,7 +1012,8 @@ string SamplingDatabase(int sample_size, int dimension)
             // Release memory
             delete[] desc_dat;
 
-            percentout(img_id, total_image);
+            //percentout(img_id, total_image);
+            percentout_timeleft(img_id, 0, total_image, startTime, 5);
         }
 
         // Next offset
@@ -1044,10 +1035,6 @@ string SamplingDatabase(int sample_size, int dimension)
 
 void Clustering(bool save_cluster, bool hdf5)
 {
-    // Release memory
-    delete[] cluster.ptr();
-    actual_cluster_amount = 0;
-
     // Check existing cluster
     if (!is_path_exist(run_param.cluster_path))
     {
@@ -1070,16 +1057,10 @@ void Clustering(bool save_cluster, bool hdf5)
         cout.flush();
         startTime = CurrentPreciseTime();
 
-        // SIFT detail
-        SIFThesaff sift_obj;
-
         // Cluster preparation
         int km_cluster_size = run_param.CLUSTER_SIZE;
-        int dimension = sift_obj.GetSIFTD();
+        int dimension = SIFThesaff::GetSIFTD();
         int km_iteration = 50;
-
-        // Preparing empty cluster
-        float* empty_cluster;
 
         if (hdf5) // MPI-AKM clustering
         {
@@ -1164,12 +1145,14 @@ void Clustering(bool save_cluster, bool hdf5)
                 ls2null(run_param.cluster_path);
                 usleep(1000000); // 1 second
             }
-
-            // Load written cluster
-            LoadCluster(run_param.cluster_path);
         }
         else    // FLANN HKM ckustering
         {
+            /*
+            // Release memory
+            delete[] cluster.ptr();
+            int actual_cluster_amount; = 0;
+
             // Flann k-mean param
             int k = 96;
             int km_branching = ((km_cluster_size - 1) / k + 1) + 1; // last +2 for higher than hierarchicalClustering tree cut method
@@ -1178,7 +1161,8 @@ void Clustering(bool save_cluster, bool hdf5)
 
             // Clustering
             // Prepare memory
-            empty_cluster = new float[km_cluster_size * dimension];
+            // Preparing empty cluster
+            float* empty_cluster = new float[km_cluster_size * dimension];
             size_t total_idx = km_cluster_size * dimension;
             for (size_t idx = 0; idx < total_idx; idx++)
                 empty_cluster[idx] = 0;
@@ -1194,26 +1178,20 @@ void Clustering(bool save_cluster, bool hdf5)
             cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 
             // Keep cluster
-            delete[] cluster.ptr();
             cluster = new_cluster;
+
+            cout << actual_cluster_amount << " cluster(s) found" << endl;
+            */
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-        cout << actual_cluster_amount << " cluster(s) found" << endl;
     }
     else
-    {
-        // Load existing cluster
-        cout << "Loading cluster..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        LoadCluster(run_param.cluster_path);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-    }
+        cout << "Cluster is available, clustering not necessary." << endl;
 }
 
 void SaveCluster(const string& out)
 {
-    // Check directory
+    /*// Check directory
     string dir_name = get_directory(out);
     make_dir_available(dir_name);
 
@@ -1222,103 +1200,25 @@ void SaveCluster(const string& out)
     size_t cluster_amount = run_param.CLUSTER_SIZE; // in case actual cluster is not equal as expected
 
     // Save to HDF5
-    HDF_write_2DFLOAT(out, "clusters", cluster.ptr(), cluster_amount, cluster_dimension);
-}
-
-void LoadCluster(const string& in)
-{
-    // Release memory
-    delete[] cluster.ptr();
-
-    size_t cluster_amount;      // Cluster size
-    size_t cluster_dimension;   // Feature dimension
-
-    // Get HDF5 header
-    HDF_get_2Ddimension(in, "clusters", cluster_amount, cluster_dimension);
-
-    // Wrap data to maxrix for flann knn searching
-    float* empty_cluster = new float[cluster_amount * cluster_dimension];
-
-    // Read from HDF5
-    HDF_read_2DFLOAT(in, "clusters", empty_cluster, cluster_amount, cluster_dimension);
-
-    Matrix<float> new_cluster(empty_cluster, cluster_amount, cluster_dimension);
-
-    // Keep cluster
-    cluster = new_cluster;
-    actual_cluster_amount = cluster_amount;
+    HDF_write_2DFLOAT(out, "clusters", cluster.ptr(), cluster_amount, cluster_dimension);*/
 }
 
 void ImageFeaturesQuantization(bool save_quantized)
 {
-    // Release memory
-    ReleaseQuantizedDatasetBuffer();
-
     // Check existing poolinfo
-    if (feature_count_per_pool.size() == 0)
+    if (feature_count_per_image.size() == 0)
         LoadPoolinfo(run_param.poolinfo_path);
-
-    /// Build-load ANN search index
-    //Index< ::flann::L2<float> > flann_search_index(AutotunedIndexParams(0.9, 0.01, 0.5, 1));
-    Index< ::flann::L2<float> > flann_search_index(KDTreeIndexParams((int)run_param.KDTREE));
-
-    // Check existing search index
-    if (!is_path_exist(run_param.searchindex_path))
-    {
-        // Checking exising cluster
-        if (cluster.cols == 0){
-            cout << "No cluster loaded or processed" << endl;
-            return;
-        }
-
-        //Index< ::flann::L2<float> > search_index(AutotunedIndexParams(0.9, 0.01, 0.5, 1));
-        Index< ::flann::L2<float> > search_index(KDTreeIndexParams((int)run_param.KDTREE));
-
-        // Building search index
-        cout << "Build FLANN search index..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        search_index.buildIndex(cluster);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        // Saving search index
-        cout << "Saving index..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        search_index.save(run_param.searchindex_path);
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        // Keep search index
-        flann_search_index = search_index;
-    }
-    else // Load existing search index
-    {
-        cout << "Load FLANN search index..";
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        Index< ::flann::L2<float> > search_index(cluster, SavedIndexParams(run_param.searchindex_path)); // load index with provided dataset
-        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-        // Keep search index
-        flann_search_index = search_index;
-    }
-
-    /// Start ANN search
-    SearchParams sparams = SearchParams();
-    //sparams.checks = FLANN_CHECKS_AUTOTUNED;
-    //sparams.checks = FLANN_CHECKS_UNLIMITED; // for only one tree
-    sparams.checks = 512;               // Higher is better, also slower
-    sparams.cores = run_param.MAXCPU;   // Take max CPU cores to run
-    size_t knn = 1;                     // For hard assignment
 
     cout << "KNN searching..";
     cout.flush();
     startTime = CurrentPreciseTime();
 
+    /// Create Quantizer
+    quantizer ann(run_param);
+
     /// Per image vector quantization
     // Feature vector per image preparation
     size_t accumulative_feature_amount = 0;
-    size_t current_feature_amount = 0;
     bool is_write = false;
     int quantization_buffer_limit = 200;
     int quantization_buffer_left = quantization_buffer_limit;
@@ -1328,18 +1228,18 @@ void ImageFeaturesQuantization(bool save_quantized)
     size_t resume_idx = 0;
     if (is_path_exist(run_param.quantized_path))
     {
-        bool pass = true;
-        // Checking quantized
-        size_t quantized_count;
-        size_t quantized_offset_count;
-
         ifstream QuantizedFile(run_param.quantized_path.c_str(), ios::binary | ios::in);
         ifstream QuantizedOffsetFile(run_param.quantized_offset_path.c_str(), ios::binary | ios::in);
         if (QuantizedFile.is_open() && QuantizedOffsetFile.is_open())
         {
+            // Checking quantized
+            size_t quantized_count;
+            size_t quantized_offset_count;
+
             // Quantized count
             QuantizedFile.read((char*)(&quantized_count), sizeof(quantized_count));
             QuantizedOffsetFile.read((char*)(&quantized_offset_count), sizeof(quantized_offset_count));
+            // Checking header count is correct
             if (quantized_count == quantized_offset_count)
             {
                 /// Checking actual data integrity
@@ -1349,52 +1249,52 @@ void ImageFeaturesQuantization(bool save_quantized)
                 QuantizedOffsetFile.seekg(last_quantized_offset_offset, QuantizedOffsetFile.beg);
                 QuantizedOffsetFile.read((char*)(&last_quantized_offset), sizeof(last_quantized_offset));
                 // Reading last quantized count
-                size_t feature_count;
+                size_t quantized_feature_count;
                 QuantizedFile.seekg(last_quantized_offset, QuantizedFile.beg);
-                QuantizedFile.read((char*)(&feature_count), sizeof(feature_count));
+                QuantizedFile.read((char*)(&quantized_feature_count), sizeof(quantized_feature_count));
 
-                if (int(feature_count) != feature_count_per_image[quantized_count - 1])
+                // Checking last quantized feature count with feature_count_per_image
+                if (int(quantized_feature_count) != feature_count_per_image[quantized_count - 1])
                 {
                     cout << "Cannot resume, quantized file and quantized_offset file are not match." << endl;
-                    pass = false;
+                    return;
                 }
-                else
-                {
-                    // Release previous memory
-                    ReleaseQuantizedDatasetBuffer();
 
-                    // Accumulating previous feature
-                    for (size_t dataset_id = 0; dataset_id < quantized_count; dataset_id++)
-                        accumulative_feature_amount += feature_count_per_image[dataset_id];
+                /// Pass!! Set resuming position
+                resume_idx = quantized_count;
 
-                    // Set resuming position
-                    resume_idx = quantized_count;
-
-                    // Flag for continue appending mode
-                    is_write = true;
-                }
+                // Flag for continue appending mode
+                is_write = true;
             }
             else
             {
                 cout << "Cannot resume, quantized file and quantized_offset file are not match." << endl;
-                pass = false;
+                return;
             }
 
             QuantizedOffsetFile.close();
             QuantizedFile.close();
         }
 
-        if (!pass)
-            return;
+        // Accumulating previous feature
+        for (size_t image_id = 0; image_id < resume_idx; image_id++)
+            accumulative_feature_amount += feature_count_per_image[image_id];
 
-        cout << "Resuming at dataset_id:" << resume_idx << endl;
+        cout << "Resuming at image_id:" << resume_idx << endl;
 	}
 	if (resume_idx < feature_count_per_image.size())
     {
+        size_t current_feature_amount = 0;
+
         // Resuming from resume_idx
-        for (size_t dataset_id = resume_idx; dataset_id < feature_count_per_image.size(); dataset_id++)
+        vector<int> quantized_counts;         // Total number per each quantized (one quantized is one image)
+        vector<int*> quantized_indices;
+        vector<float*> quantized_dists;
+        for (size_t image_id = resume_idx; image_id < feature_count_per_image.size(); image_id++)
         {
-            current_feature_amount = feature_count_per_image[dataset_id];
+            Matrix<float> dataset_descriptor;
+
+            current_feature_amount = feature_count_per_image[image_id];
 
             // Old version
             /* Slice features per image from full-size dataset_descriptor to be quantized
@@ -1407,17 +1307,16 @@ void ImageFeaturesQuantization(bool save_quantized)
             */
             // New version
             // Load specific dataset_descriptor
-            LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_DESC);
+            LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_DESC, dataset_descriptor);
 
             // Accumulate offset of total feature per image for the next load
             accumulative_feature_amount += current_feature_amount;
 
             //Matrix<float> feature_data(current_feature, current_feature_amount, dimension);
-            Matrix<int> result_index(new int[current_feature_amount * knn], current_feature_amount, knn); // size = feature_amount x knn
-            Matrix<float> result_dist(new float[current_feature_amount * knn], current_feature_amount, knn);
+            Matrix<int> result_index; // size = feature_amount x knn
+            Matrix<float> result_dist;
 
-            //flann_search_index.knnSearch(feature_data, result_index, result_dist, knn, sparams);
-            flann_search_index.knnSearch(dataset_descriptor, result_index, result_dist, knn, sparams);
+            ann.quantize(dataset_descriptor, current_feature_amount, result_index, result_dist);
 
             // Debug
             /*for(size_t row = 0; row < 3; row++)
@@ -1431,40 +1330,58 @@ void ImageFeaturesQuantization(bool save_quantized)
             }*/
 
             // Keep result
-            int* result_index_idx = result_index.ptr();
+            // Keep in a buffer
+            quantized_counts.push_back(current_feature_amount);
+            quantized_indices.push_back(result_index.ptr());
+            quantized_dists.push_back(result_dist.ptr());
+            /*int* result_index_idx = result_index.ptr();
             float* result_dist_idx = result_dist.ptr();
             // row base result
             // col is nn number
+            size_t knn = ann.knn;
             for(size_t col = 0; col < knn; col++)
             {
                 vector<int> result_index_vector;
                 vector<float> result_dist_vector;
+                // For one image
                 for(size_t row = 0; row < result_index.rows; row++)
                 {
                     result_index_vector.push_back(result_index_idx[row * knn + col]);
                     result_dist_vector.push_back(result_dist_idx[row * knn + col]);
                 }
-                dataset_quantized_indices.push_back(result_index_vector);
-                dataset_quantized_dists.push_back(result_dist_vector);
+                // Keep in a buffer
+                quantized_indices.push_back(result_index_vector);
+                quantized_dists.push_back(result_dist_vector);
             }
+            */
 
             // Check quantization buffer reach its limit, or reach the last images
-            if (--quantization_buffer_left == 0 || dataset_id == feature_count_per_image.size() - 1)
+            if (--quantization_buffer_left == 0 || image_id == feature_count_per_image.size() - 1)
             {
                 // Flushing buffer to disk
-                SaveQuantizedDataset(is_write);
+                SaveQuantizedDataset(quantized_counts, quantized_indices, quantized_dists, is_write);
 
+                /// Clear written quantized buffer
+                // Clear size
+                quantized_counts.clear();
                 // Clear buffer
-                ReleaseQuantizedDatasetBuffer();
+                for (size_t quantized_idx = 0; quantized_idx < quantized_counts.size(); quantized_idx++)
+                {
+                    delete[] quantized_indices[quantized_idx];
+                    delete[] quantized_dists[quantized_idx];
+                }
+                quantized_indices.clear();
+                quantized_dists.clear();
 
                 is_write = true;
                 quantization_buffer_left = quantization_buffer_limit;
             }
 
-            percentout(dataset_id, feature_count_per_image.size(), 1);
+            //percentout(image_id, feature_count_per_image.size(), 1);
+            percentout_timeleft(image_id, resume_idx, feature_count_per_image.size(), startTime, 20);
 
             // Release memory
-            //delete[] feature_data.ptr();
+            delete[] dataset_descriptor.ptr();
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
@@ -1475,9 +1392,9 @@ void ImageFeaturesQuantization(bool save_quantized)
     // Preview
     for(size_t query_idx = 0; query_idx < 2; query_idx++)
     {
-        for(size_t result_idx = 0; result_idx < dataset_quantized_indices[query_idx].size(); result_idx++)
+        for(size_t result_idx = 0; result_idx < quantized_indices[query_idx].size(); result_idx++)
         {
-            cout << dataset_quantized_indices[query_idx][result_idx] << " ";
+            cout << quantized_indices[query_idx][result_idx] << " ";
         }
         cout << endl;
     }
@@ -1499,10 +1416,11 @@ void ImageFeaturesQuantization(bool save_quantized)
     ///---- AKM Search End ----///
 }
 
-void SaveQuantizedDataset(bool append)
+void SaveQuantizedDataset(const vector<int>& quantized_counts, const vector<int*>& quantized_indices, const vector<float*>& quantized_dists, bool append)
 {
-    size_t quantized_count;
+    size_t quantized_count;             // quantized_count is image count
     size_t current_quantized_offset;
+    vector<size_t> quantized_offset;
 
     fstream OutFile;
     if (append)
@@ -1521,7 +1439,7 @@ void SaveQuantizedDataset(bool append)
 
             // Update quantized_count for append mode
             OutFile.seekp(0, OutFile.beg);
-            quantized_count += dataset_quantized_indices.size();
+            quantized_count += quantized_counts.size();
             OutFile.write(reinterpret_cast<char*>(&quantized_count), sizeof(quantized_count));
 
             // Go to the end of stream
@@ -1531,7 +1449,7 @@ void SaveQuantizedDataset(bool append)
         else
         {
             // Write at the beginning of stream for normal mode
-            quantized_count = dataset_quantized_indices.size();
+            quantized_count = quantized_counts.size();
             OutFile.write(reinterpret_cast<char*>(&quantized_count), sizeof(quantized_count));
 
             // Start after read quantized_count
@@ -1539,13 +1457,13 @@ void SaveQuantizedDataset(bool append)
         }
 
         // Quantize index and distance
-        for (size_t quantized_idx = 0; quantized_idx < dataset_quantized_indices.size(); quantized_idx++)
+        for (size_t quantized_idx = 0; quantized_idx < quantized_counts.size(); quantized_idx++)
         {
             // Keep offset
-            dataset_quantized_offset.push_back(current_quantized_offset);
+            quantized_offset.push_back(current_quantized_offset);
 
             // Feature size
-            size_t feature_count = dataset_quantized_indices[quantized_idx].size();
+            size_t feature_count = quantized_counts[quantized_idx];
             OutFile.write(reinterpret_cast<char*>(&feature_count), sizeof(feature_count));
             current_quantized_offset += sizeof(feature_count);
 
@@ -1554,11 +1472,11 @@ void SaveQuantizedDataset(bool append)
             for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
             {
                 // Index
-                int quantized_index = dataset_quantized_indices[quantized_idx][feature_idx];
+                int quantized_index = quantized_indices[quantized_idx][feature_idx];
                 OutFile.write(reinterpret_cast<char*>(&quantized_index), sizeof(quantized_index));
                 current_quantized_offset += sizeof(quantized_index);
                 // Dist
-                float quantized_dist = dataset_quantized_dists[quantized_idx][feature_idx];
+                float quantized_dist = quantized_dists[quantized_idx][feature_idx];
                 OutFile.write(reinterpret_cast<char*>(&quantized_dist), sizeof(quantized_dist));
                 current_quantized_offset += sizeof(quantized_dist);
 
@@ -1567,10 +1485,13 @@ void SaveQuantizedDataset(bool append)
         }
 
         // Write offset
-        bin_write_vector_SIZET(run_param.quantized_offset_path, dataset_quantized_offset, append);
+        bin_write_vector_SIZET(run_param.quantized_offset_path, quantized_offset, append);
 
         // Close file
         OutFile.close();
+
+        // Release memory
+        quantized_offset.clear();
     }
 }
 
@@ -1587,14 +1508,11 @@ void LoadQuantizedDatasetOffset()
     dataset_quantized_offset_ready = true;
 }
 
-void LoadSpecificQuantizedDataset(size_t start_idx, size_t load_size)
+void LoadSpecificQuantizedDataset(vector<int>& quantized_counts, vector<int*>& quantized_indices, vector<float*>& quantized_dists, size_t start_idx, size_t load_size)
 {
     // Load quantized offset
     if (!dataset_quantized_offset_ready)
         LoadQuantizedDatasetOffset();
-
-    // Release memory
-    ReleaseQuantizedDatasetBuffer();
 
     ifstream InFile (run_param.quantized_path.c_str(), ios::binary);
     if (InFile)
@@ -1603,31 +1521,26 @@ void LoadSpecificQuantizedDataset(size_t start_idx, size_t load_size)
         size_t curr_offset = dataset_quantized_offset[start_idx];
         InFile.seekg(curr_offset, InFile.beg);
 
-        for (size_t dataset_quantized_idx = 0; dataset_quantized_idx < load_size; dataset_quantized_idx++)
+        for (size_t quantized_idx = 0; quantized_idx < load_size; quantized_idx++)
         {
             // Feature size
             size_t feature_count;
             InFile.read((char*)(&feature_count), sizeof(feature_count));
 
             // Feature quantized index and distance to index
-            vector<int> dataset_quantized_index;
-            vector<float> dataset_quantized_dist;
+            int* quantized_index = new int[feature_count];
+            float* quantized_dist = new float[feature_count];
             for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
             {
                 // Index
-                int index_data;
-                InFile.read((char*)(&index_data), sizeof(index_data));
-                dataset_quantized_index.push_back(index_data);
+                InFile.read((char*)(&(quantized_index[feature_idx])), sizeof(quantized_index[feature_idx]));
                 // Dist
-                float dist_data;
-                InFile.read((char*)(&dist_data), sizeof(dist_data));
-                dataset_quantized_dist.push_back(dist_data);
-
-                //cout << "index_data: " << index_data << " dist_data:" << dist_data << endl;
+                InFile.read((char*)(&(quantized_dist[feature_idx])), sizeof(quantized_dist[feature_idx]));
             }
-            dataset_quantized_indices.push_back(dataset_quantized_index);
-            dataset_quantized_dists.push_back(dataset_quantized_dist);
-            //cout << "dataset_quantized_indices.size(): " << dataset_quantized_indices.size() << endl;
+            quantized_counts.push_back(feature_count);
+            quantized_indices.push_back(quantized_index);
+            quantized_dists.push_back(quantized_dist);
+            //cout << "quantized_indices.size(): " << quantized_indices.size() << endl;
         }
 
         // Close file
@@ -1635,83 +1548,142 @@ void LoadSpecificQuantizedDataset(size_t start_idx, size_t load_size)
     }
 }
 
-void ReleaseQuantizedDatasetBuffer()
+void ReleaseQuantizedOffset()
 {
     // Release memory
-    if (dataset_quantized_indices.size())
+    if (dataset_quantized_offset_ready)
     {
         // Clear offset
         dataset_quantized_offset_ready = false;
         dataset_quantized_offset.clear();
-
-        // Clear buffer
-        for (size_t quantized_idx = 0; quantized_idx < dataset_quantized_indices.size(); quantized_idx++)
-        {
-            dataset_quantized_indices[quantized_idx].clear();
-            dataset_quantized_dists[quantized_idx].clear();
-        }
-        dataset_quantized_indices.clear();
-        dataset_quantized_dists.clear();
     }
 }
 
 void Bow(bool save_bow)
 {
-    // Checking existing bow file
-    if (!is_path_exist(run_param.bow_path))
+    /// Prerequisite check
+    // Checking quantized dataset availability
+    if (!is_path_exist(run_param.quantized_path))
     {
-        // Checking quantized dataset availability
-        if (!is_path_exist(run_param.quantized_path))
+        cout << "No quantized dataset available, please run knn first" << endl;
+        return;
+    }
+
+    /// Building Bow
+    cout << "Building Bow..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+
+    /// Create bow builder object
+    bow bow_builder(run_param);
+
+    /// Resuming position variable
+    size_t accumulative_feature_amount = 0;
+    bool is_write = false;
+
+    /// Resuming checkpoint
+    // Checking existing bow file
+    size_t resume_idx = 0;
+    if (is_path_exist(run_param.bow_path))
+    {
+        ifstream BowFile(run_param.bow_path.c_str(), ios::binary | ios::in);
+        ifstream BowOffsetFile(run_param.bow_offset_path.c_str(), ios::binary | ios::in);
+        ifstream BowPoolFile(run_param.bow_pool_path.c_str(), ios::binary | ios::in);
+        ifstream BowPoolOffsetFile(run_param.bow_pool_offset_path.c_str(), ios::binary | ios::in);
+        if (BowFile.is_open() && BowOffsetFile.is_open() &&
+            BowPoolFile.is_open() && BowPoolOffsetFile.is_open())
         {
-            cout << "No quantized dataset available, please run knn first" << endl;
-            return;
+            // Checking bow and bow_pool
+            size_t bow_count;
+            size_t bow_offset_count;
+            size_t bow_pool_count;
+            size_t bow_pool_offset_count;
+
+            // Bow count and BowPool count
+            BowFile.read((char*)(&bow_count), sizeof(bow_count));
+            BowOffsetFile.read((char*)(&bow_offset_count), sizeof(bow_offset_count));
+            BowPoolFile.read((char*)(&bow_pool_count), sizeof(bow_pool_count));
+            BowPoolOffsetFile.read((char*)(&bow_pool_offset_count), sizeof(bow_pool_offset_count));
+            // Checking header count is correct
+            if (bow_count == bow_offset_count &&
+                bow_pool_count == bow_pool_offset_count)
+            {
+                /// We assume if header is correct, data integrity should be corrected for both bow and bow_pool
+
+                /// Pass!! Set resuming position
+                resume_idx = bow_count;
+
+                // Flag for continue appending mode
+                is_write = true;
+            }
+            else
+            {
+                cout << "Cannot resume, bow file and bow_offset or bow_pool file and bow_pool_offset file are not match." << endl;
+                return;
+            }
+
+            BowPoolOffsetFile.close();
+            BowPoolFile.close();
+            BowOffsetFile.close();
+            BowFile.close();
         }
 
-        /// Building Bow
-        cout << "Building Bow..";
-        // Create bow builder object
-        bow bow_builder(run_param);
-        cout.flush();
-        startTime = CurrentPreciseTime();
-        size_t accumulative_feature_amount = 0;
+        // Accumulating previous feature
+        for (size_t image_id = 0; image_id < resume_idx; image_id++)
+            accumulative_feature_amount += feature_count_per_image[image_id];
+
+        cout << "Resuming at image_id:" << resume_idx << endl;
+	}
+	cout << "feature_count_per_image.size(): " << feature_count_per_image.size() << endl;
+    if (resume_idx < feature_count_per_image.size())
+    {
         int current_feature_amount = 0;
         int current_pool_feature_amount = 0;
-        bool is_write = false;
+
         /// For each image
-        for (size_t image_id = 0; image_id < feature_count_per_image.size(); image_id++)
+        vector<int> quantized_counts;         // Total number per each quantized (one quantized is one image)
+        vector<int*> quantized_indices;
+        vector<float*> quantized_dists;
+        for (size_t image_id = resume_idx; image_id < feature_count_per_image.size(); image_id++)
         {
+            Matrix<float> dataset_keypoint;
+
             current_feature_amount = feature_count_per_image[image_id];
 
+            // Skip the rest if nothing here
+            /*if (current_feature_amount == 0)
+                continue;*/
+
             // Load each quantized index
-            LoadSpecificQuantizedDataset(image_id);
+            LoadSpecificQuantizedDataset(quantized_counts, quantized_indices, quantized_dists, image_id);       // Load quantized_indices, quantized_dists
             // Load each keypoint
-            LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_KP);
+            LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_KP, dataset_keypoint);        // Load dataset_key
             // Convert keypoint to vector< vector<float> >
             size_t dimension = dataset_keypoint.cols;
             float* dataset_keypoint_idx = dataset_keypoint.ptr();
             // Feature collection
-            vector< vector<float> > features;
+            vector<float*> features;
             for (int feature_id = 0; feature_id < current_feature_amount; feature_id++)
             {
-                size_t feature_mem_idx = feature_id * dimension;
+                size_t feature_offset = feature_id * dimension;
 
-                // Create feature
-                vector<float> feature;
-                feature.push_back(dataset_keypoint_idx[feature_mem_idx + 0]);   // x
-                feature.push_back(dataset_keypoint_idx[feature_mem_idx + 1]);   // y
-                feature.push_back(dataset_keypoint_idx[feature_mem_idx + 2]);   // a
-                feature.push_back(dataset_keypoint_idx[feature_mem_idx + 3]);   // b
-                feature.push_back(dataset_keypoint_idx[feature_mem_idx + 4]);   // c
+                // Create feature keypoint
+                float* kp = new float[dimension];                                   // <---- new memory create here, please delete
+                kp[0] = dataset_keypoint_idx[feature_offset + 0];  // x
+                kp[1] = dataset_keypoint_idx[feature_offset + 1];  // y
+                kp[2] = dataset_keypoint_idx[feature_offset + 2];  // a
+                kp[3] = dataset_keypoint_idx[feature_offset + 3];  // b
+                kp[4] = dataset_keypoint_idx[feature_offset + 4];  // c
 
-                // Keep new feature into its corresponding bin (cluster_id)
-                features.push_back(feature);
+                // Keep new kp into its corresponding bin (cluster_id)
+                features.push_back(kp);
             }
             accumulative_feature_amount += current_feature_amount;
             // Accumulate pool counter
             current_pool_feature_amount += current_feature_amount;
 
             // Build BoW
-            bow_builder.build_bow(dataset_quantized_indices[0], features);
+            bow_builder.build_bow(quantized_indices[0], features);
 
             // If total features reach total features in the pool, do pooling then flush to disk
             if (current_pool_feature_amount == feature_count_per_pool[ImgListsPoolIds[image_id]])
@@ -1733,12 +1705,31 @@ void Bow(bool save_bow)
                 bow_builder.reset_bow_pool();
             }
 
-            percentout(image_id, feature_count_per_image.size(), 1);
+            //percentout(image_id, feature_count_per_image.size(), 20);
+            percentout_timeleft(image_id, resume_idx, feature_count_per_image.size(), startTime, 20);
+
+            // Release memory
+            delete[] dataset_keypoint.ptr();
+
+            /// Release quantized data
+            // Clear buffer
+            for (size_t quantized_idx = 0; quantized_idx < quantized_counts.size(); quantized_idx++)
+            {
+                delete[] quantized_indices[quantized_idx];
+                delete[] quantized_dists[quantized_idx];
+            }
+            quantized_counts.clear();
+            quantized_indices.clear();
+            quantized_dists.clear();
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
     else
         cout << "Building BoW does not necessary. BoW has been built." << endl;
+
+
+    // Release memory
+    ReleaseQuantizedOffset();
 }
 
 void build_invert_index()
@@ -1760,8 +1751,7 @@ void build_invert_index()
 
     // Create invert index database
     invert_index invert_hist;
-    invert_hist.reset();
-    invert_hist.init(run_param.CLUSTER_SIZE, run_param.inv_path);
+    invert_hist.init(run_param);
 
     cout << "Building invert index database..";
     // Create bow builder object (use as bow loader)
@@ -1773,8 +1763,8 @@ void build_invert_index()
     for (size_t pool_id = 0; pool_id < feature_count_per_pool.size(); pool_id++)
     {
         // Read existing bow
-        vector<bow_bin_object> read_bow;
-        bow_builder.load_specific_bow_pool(pool_id, read_bow);
+        vector<bow_bin_object*> read_bow;
+        bow_builder.load_specific_bow_pool(pool_id, read_bow);  // <---- This create kp new memory inside, please delete
         //cout << "pool_id: " << pool_id << " read_bow.size(): " << read_bow.size() << endl;
 
         /*cout << "cluster_id: ";
@@ -1788,7 +1778,15 @@ void build_invert_index()
         // Add to inverted hist
         invert_hist.add(pool_id, read_bow);
 
-        percentout(pool_id, feature_count_per_pool.size(), 20);
+        // Release bow_bin_object
+        // since invert_hist use just feature_object and kp[]
+        // Then create internal new dataset_object()
+        // Deleting bow_bin_object is necessary here
+        for (size_t bin_id = 0; bin_id < read_bow.size(); bin_id++)
+            delete read_bow[bin_id];                // delete bow_bin_object
+
+        //percentout(pool_id, feature_count_per_pool.size(), 20);
+        percentout_timeleft(pool_id, 0, feature_count_per_pool.size(), startTime, 5);
     }
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 
@@ -1804,7 +1802,11 @@ void build_invert_index()
     invert_hist.save_invfile();
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 
+    cout << "Clean up inverted index memory..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
     // Release mem
-    invert_hist.reset();
+    invert_hist.release_memory();
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 }
 //;)
