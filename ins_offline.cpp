@@ -911,30 +911,6 @@ void LoadPoolinfo(const string& in)
             feature_count_per_image.push_back(feature_count);
 
             img_features += feature_count;
-
-            /*
-            if (feature_count == -1)
-            {
-                // Image
-                stringstream curr_img_parent;
-                stringstream curr_img_path;
-                curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[dataset_idx]];
-                curr_img_path << curr_img_parent.str() << "/" << ImgLists[dataset_idx];
-
-                // SIFT path
-                stringstream curr_img_export_parent;
-                stringstream curr_img_export_path;
-                curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[dataset_idx]];
-                curr_img_export_path << curr_img_export_parent.str() << "/" << ImgLists[dataset_idx] << ".sifthesaff";
-
-                string cmd = "/home/stylix/webstylix/code/lib/sifthesaff/bin/Release/sifthesaff_extractor -in " + curr_img_path.str() + " -out " + curr_img_export_path.str() + " -m b" << endl;
-                //cout << curr_img_path.str() << endl;
-                //cout << curr_img_export_path.str() << endl;
-                cout << "Launch emergency database repair!!" << endl;
-                cout << "cmd: " << cmd;
-                exec(cmd);
-            }
-            */
         }
 
         // Close file
@@ -1214,7 +1190,8 @@ void ImageFeaturesQuantization(bool save_quantized)
     startTime = CurrentPreciseTime();
 
     /// Create Quantizer
-    quantizer ann(run_param);
+    quantizer ann;
+    ann.init(run_param);
 
     /// Per image vector quantization
     // Feature vector per image preparation
@@ -1575,7 +1552,8 @@ void Bow(bool save_bow)
     startTime = CurrentPreciseTime();
 
     /// Create bow builder object
-    bow bow_builder(run_param);
+    bow bow_builder;
+    bow_builder.init(run_param);
 
     /// Resuming position variable
     size_t accumulative_feature_amount = 0;
@@ -1591,7 +1569,7 @@ void Bow(bool save_bow)
         ifstream BowPoolFile(run_param.bow_pool_path.c_str(), ios::binary | ios::in);
         ifstream BowPoolOffsetFile(run_param.bow_pool_offset_path.c_str(), ios::binary | ios::in);
         if (BowFile.is_open() && BowOffsetFile.is_open() &&
-            BowPoolFile.is_open() && BowPoolOffsetFile.is_open())
+            (!run_param.pooling_enable || (BowPoolFile.is_open() && BowPoolOffsetFile.is_open())))
         {
             // Checking bow and bow_pool
             size_t bow_count;
@@ -1602,11 +1580,14 @@ void Bow(bool save_bow)
             // Bow count and BowPool count
             BowFile.read((char*)(&bow_count), sizeof(bow_count));
             BowOffsetFile.read((char*)(&bow_offset_count), sizeof(bow_offset_count));
-            BowPoolFile.read((char*)(&bow_pool_count), sizeof(bow_pool_count));
-            BowPoolOffsetFile.read((char*)(&bow_pool_offset_count), sizeof(bow_pool_offset_count));
+            if (run_param.pooling_enable)
+            {
+                BowPoolFile.read((char*)(&bow_pool_count), sizeof(bow_pool_count));
+                BowPoolOffsetFile.read((char*)(&bow_pool_offset_count), sizeof(bow_pool_offset_count));
+            }
             // Checking header count is correct
             if (bow_count == bow_offset_count &&
-                bow_pool_count == bow_pool_offset_count)
+                (!run_param.pooling_enable || (bow_pool_count == bow_pool_offset_count)))
             {
                 /// We assume if header is correct, data integrity should be corrected for both bow and bow_pool
 
@@ -1650,7 +1631,10 @@ void Bow(bool save_bow)
 
             current_feature_amount = feature_count_per_image[image_id];
 
-            // Skip the rest if nothing here
+            /* Skip the rest if nothing here <---   not good to do this,
+                                                    since it will reduce total number of bow
+                                                    or keep only non empty bow,
+                                                    then we cannot access to original bow idx any more*/
             /*if (current_feature_amount == 0)
                 continue;*/
 
@@ -1688,12 +1672,15 @@ void Bow(bool save_bow)
             // If total features reach total features in the pool, do pooling then flush to disk
             if (current_pool_feature_amount == feature_count_per_pool[ImgListsPoolIds[image_id]])
             {
-                // Pooling from internal multiple bow
-                bow_builder.build_pool();
                 // Flush bow to disk
                 bow_builder.flush_bow(is_write);
-                // Flush bow_pool to disk
-                bow_builder.flush_bow_pool(is_write);
+                if (run_param.pooling_enable)
+                {
+                    // Pooling from internal multiple bow
+                    bow_builder.build_pool();
+                    // Flush bow_pool to disk
+                    bow_builder.flush_bow_pool(is_write);
+                }
 
                 is_write = true;
 
@@ -1702,7 +1689,8 @@ void Bow(bool save_bow)
 
                 // Release memory
                 bow_builder.reset_bow();
-                bow_builder.reset_bow_pool();
+                if (run_param.pooling_enable)
+                    bow_builder.reset_bow_pool();
             }
 
             //percentout(image_id, feature_count_per_image.size(), 20);
@@ -1749,64 +1737,94 @@ void build_invert_index()
     // Provide invert index directory
     make_dir_available(run_param.inv_path);
 
+    char opt = ' ';
+    size_t word_buffer_size = run_param.CLUSTER_SIZE;
+    size_t word_start = 0;
+    size_t word_end = run_param.CLUSTER_SIZE - 1;
+    cout << "Since large scale inverted index may have a problem with slow I/O." << endl;
+    cout << "Do you want to build inverted index by word-major? [y|n]:"; cout.flush();
+    cin >> opt;
+    if (opt == 'y')
+    {
+        cout << "Please specify.." << endl;
+        cout << "Total words per one flush: "; cout.flush();
+        cin >> word_buffer_size;
+        cout << "Word start: "; cout.flush();
+        cin >> word_start;
+        cout << "Word end: "; cout.flush();
+        cin >> word_end;
+        if (word_end > run_param.CLUSTER_SIZE - 1)
+            word_end = run_param.CLUSTER_SIZE - 1;
+    }
+    cout << "Building inverted index database.." << endl;
     // Create invert index database
     invert_index invert_hist;
     invert_hist.init(run_param);
-
-    cout << "Building invert index database..";
     // Create bow builder object (use as bow loader)
-    bow bow_builder(run_param);
-    cout.flush();
+    bow bow_builder;
+    bow_builder.init(run_param);
     startTime = CurrentPreciseTime();
-    /// Building inverted index for each pool
-    //cout << "feature_count_per_pool.size(): " << feature_count_per_pool.size() << endl;
-    for (size_t pool_id = 0; pool_id < feature_count_per_pool.size(); pool_id++)
+
+    size_t pool_size = feature_count_per_pool.size();
+    while (word_start <= word_end)
     {
-        // Read existing bow
-        vector<bow_bin_object*> read_bow;
-        bow_builder.load_specific_bow_pool(pool_id, read_bow);  // <---- This create kp new memory inside, please delete
-        //cout << "pool_id: " << pool_id << " read_bow.size(): " << read_bow.size() << endl;
+        size_t word_lower_bound = word_start;
+        size_t word_upper_bound = word_start + word_buffer_size;
+        if (word_upper_bound > run_param.CLUSTER_SIZE)
+            word_upper_bound = run_param.CLUSTER_SIZE;
+        timespec block_start = CurrentPreciseTime();
+        cout << "[" << word_lower_bound << " - " << word_upper_bound << "] "; cout.flush();
 
-        /*cout << "cluster_id: ";
-        for (size_t bin_idx = 0; bin_idx < read_bow.size(); bin_idx++)
-            cout << read_bow[bin_idx].cluster_id << " ";
-        cout << endl;*/
+        // Set load filter
+        bow_builder.set_load_filter(word_lower_bound, word_upper_bound);
 
-        // tf and normalize
-        bow_builder.logtf_unitnormalize(read_bow);
+        /// Building inverted index for each pool
+        for (size_t pool_id = 0; pool_id < pool_size; pool_id++)
+        {
+            // Read existing bow
+            vector<bow_bin_object*> read_bow;
+            if (run_param.pooling_enable)
+                bow_builder.load_specific_bow_pool(pool_id, read_bow);  // <---- This create kp new memory inside, please delete
+            else
+                bow_builder.load_specific_bow(pool_id, read_bow);       // <---- This create kp new memory inside, please delete
+            //cout << "pool_id: " << pool_id << " read_bow.size(): " << read_bow.size() << endl;
 
-        // Add to inverted hist
-        invert_hist.add(pool_id, read_bow);
+            // tf and normalize
+            bow_builder.logtf_unitnormalize(read_bow);
 
-        // Release bow_bin_object
-        // since invert_hist use just feature_object and kp[]
-        // Then create internal new dataset_object()
-        // Deleting bow_bin_object is necessary here
-        for (size_t bin_id = 0; bin_id < read_bow.size(); bin_id++)
-            delete read_bow[bin_id];                // delete bow_bin_object
+            // Add to inverted hist
+            invert_hist.add(pool_id, read_bow);
 
-        //percentout(pool_id, feature_count_per_pool.size(), 20);
-        percentout_timeleft(pool_id, 0, feature_count_per_pool.size(), startTime, 5);
+            // Release bow_bin_object
+            // since invert_hist use just feature_object and kp[]
+            // Then create internal new dataset_object()
+            // Deleting bow_bin_object is necessary here
+            size_t bin_size = read_bow.size();
+            for (size_t bin_id = 0; bin_id < bin_size; bin_id++)
+                delete read_bow[bin_id];                // delete bow_bin_object
+
+            //percentout(pool_id, feature_count_per_pool.size(), 20);
+            percentout_timeleft(pool_id, 0, pool_size, block_start, 20);
+        }
+        // Flush to disk
+        invert_hist.flush();
+
+        // Continue next block
+        word_start = word_upper_bound;
+
+        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(block_start) << " s)" << endl;
     }
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 
-    cout << "Updating idf..";
-    cout.flush();
+    // Rebuild header
+    cout << "Do you want to re-build inverted index header? [y|n]:"; cout.flush();
+    cin >> opt;
     startTime = CurrentPreciseTime();
-    invert_hist.update_idf();
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-    cout << "Saving invert index database..";
-    cout.flush();
-    startTime = CurrentPreciseTime();
-    invert_hist.save_invfile();
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-
-    cout << "Clean up inverted index memory..";
-    cout.flush();
-    startTime = CurrentPreciseTime();
-    // Release mem
-    invert_hist.release_memory();
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+    if (opt == 'y')
+    {
+        cout << "Building inverted index header.."; cout.flush();
+        invert_hist.build_header_from_bow_file();
+        cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+    }
 }
 //;)
