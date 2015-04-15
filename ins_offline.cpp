@@ -4,8 +4,35 @@
  *  Created on: July 11, 2013
  *      Author: Siriwat Kasamwattanarote
  */
+#include <sys/stat.h>   // file-directory existing
+#include <sys/types.h>  // file-directory
+#include <dirent.h>     // file-directory
+#include <unistd.h>     // sysconf, usleep
+#include <cstdlib>
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <unordered_map>
+#include <bitset>
+#include <cmath>
+#include <omp.h>
+
+#include <flann/flann.hpp>
+
+// Siriwat's header
+#include "../lib/alphautils/alphautils.h"
+#include "../lib/alphautils/hdf5_io.h"
+#include "../lib/sifthesaff/SIFThesaff.h"
+#include "../lib/ins/ins_param.h"
+#include "../lib/ins/invert_index.h"
+#include "../lib/ins/bow.h"
+#include "../lib/ins/quantizer.h"
 
 #include "ins_offline.h"
+
+#include "version.h"
 
 using namespace std;
 using namespace ::flann;
