@@ -1121,13 +1121,14 @@ string SamplingDatabase(int sample_size)
     size_t offset_feature_id = 0;
     size_t current_feature_amount = 0;
     size_t total_feature_amount = 0;
+    size_t dimension = SIFThesaff::GetSIFTD();
     for (size_t img_id = 0; img_id < total_image; img_id++)
     {
         current_feature_amount = feature_count_per_image[img_id];
 
         if (sampling_mask[img_id])
         {
-            float* desc_dat = new float[current_feature_amount * dimension];
+            float* desc_dat;
 
             // Load from offset
             HDF_read_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", desc_dat, offset_feature_id, current_feature_amount);
@@ -1154,11 +1155,151 @@ string SamplingDatabase(int sample_size)
     cout << "Total features: " << offset_feature_id << endl;
     cout << "Total sampled features: " << total_feature_amount << endl;
 
+    exec("mv " + feature_descriptor_sample_path + " " + feature_descriptor_sample_path + "_feature-" + toString(total_feature_amount));
     feature_descriptor_sample_path = feature_descriptor_sample_path + "_feature-" + toString(total_feature_amount);
-    exec("mv " + run_param.feature_descriptor_path + " " + feature_descriptor_sample_path);
 
     // Release memory
     delete[] sampling_mask;
+
+    return feature_descriptor_sample_path;
+}
+
+string SamplingOnTheFly()
+{
+    /// Load each image features
+    // Checking image avalibality
+    if (ImgLists.size() == 0)
+    {
+        cout << "No image available" << endl;
+    }
+
+    size_t target_feature_amount;
+    cout << "Target features amount: "; cout.flush();
+    cin >> target_feature_amount;
+    string feature_descriptor_sample_path = run_param.feature_descriptor_path + "_target_" + toString(target_feature_amount);
+
+    // Extracting feature from sampled image to HDF5 file
+    cout << "Sampling on-the-fly..";
+    // Release memory
+    size_t block_size = 1024;
+    size_t user_buffer;
+    cout << "Do you want to set buffer size (default:1024)? 0 = no | #number = yes:"; cout.flush();
+    cin >> user_buffer;
+    if (user_buffer > 0)
+        block_size = user_buffer;
+
+    /// ======== Loading and writing features to hdf5 block-by-block ========
+    bool did_write = false;
+
+    // Sift header
+    int sift_dim = SIFThesaff::GetSIFTD();              // dataset dimension
+
+    // Sampling variables
+    size_t total_image = ImgLists.size();
+    bool* sampling_mask = new bool[total_image]();
+    size_t sampled_image = 0;
+    size_t sampled_feature = 0;
+
+    cout << "Extracting and Packing dataset descriptor..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+    while (sampled_feature < target_feature_amount)
+    {
+        // Sampled image_id
+        vector<size_t> sampled_id;
+
+        // Sampling
+        for (size_t img_idx = 0; img_idx < block_size; )
+        {
+            size_t rand_img_id = random() % total_image;
+            if (!sampling_mask[rand_img_id])
+            {
+                sampling_mask[rand_img_id] = true;
+                sampled_id.push_back(rand_img_id);
+                img_idx++;
+            }
+        }
+
+        //==== Packing keypoint and descriptor
+        size_t block_feature_count = 0;
+        vector<float*> desc_buffer(block_size);
+        vector<int> numkp_buffer(block_size);
+
+        /// Parallel packing
+        #pragma omp parallel shared(sampled_id,block_size,block_feature_count,desc_buffer,numkp_buffer,run_param,ParentPaths,Img2ParentsIdx,ImgLists)
+        {
+            #pragma omp for schedule(dynamic,1) reduction(+ : block_feature_count)
+            for (size_t block_idx = 0; block_idx < block_size; block_idx++)
+            {
+                size_t curr_img_idx = sampled_id[block_idx];
+                //string curr_img_feature_path = run_param.dataset_feature_root_dir + "/" + run_param.feature_name + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx] + ".sifthesaff";
+                string curr_img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx];
+
+                SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
+                //sifthesaff_dataset.importKeypoints(curr_img_feature_path);
+                sifthesaff_dataset.extractPerdochSIFT(curr_img_path);
+
+                /// Packing feature
+                int num_kp = sifthesaff_dataset.num_kp;
+                block_feature_count += num_kp;
+
+                float* desc_dat = new float[num_kp * sift_dim];         // descriptor data
+                for(int row = 0; row < num_kp; row++)
+                {
+                    //== descriptor
+                    for(int col = 0; col < sift_dim; col++)
+                        desc_dat[row * sift_dim + col] = sifthesaff_dataset.desc[row][col];
+                }
+                desc_buffer[block_idx] = desc_dat;
+                numkp_buffer[block_idx] = num_kp;
+            }
+        }
+
+        /// Flushing out to HDF5 file
+        if (block_feature_count)
+        {
+            float* block_desc = new float[block_feature_count * sift_dim];
+            // Packing all features into one before writing to HDF5
+            size_t desc_offset = 0;
+            for(size_t block_id = 0; block_id < block_size; block_id++)
+            {
+                // Pack desc
+                size_t desc_size = sift_dim * numkp_buffer[block_id];
+                for(size_t col = 0; col < desc_size; col++)
+                    block_desc[desc_offset + col] = desc_buffer[block_id][col];
+                desc_offset += desc_size;
+            }
+
+            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", block_desc, block_feature_count, sift_dim);
+
+            did_write = true;
+
+            // Release memory
+            for (size_t block_id = 0; block_id < block_size; block_id++)
+                delete[] desc_buffer[block_id];
+            delete[] block_desc;
+
+            sampled_image += block_size;
+            sampled_feature += block_feature_count;
+        }
+
+        // Clear buffer (already delete[] after flush)
+        vector<float*>().swap(desc_buffer);
+        vector<int>().swap(numkp_buffer);
+
+        //percentout(img_idx, ImgLists.size(), 1);
+        percentout_timeleft(sampled_feature, 0, target_feature_amount, startTime, 1);
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    // Release memory
+    delete[] sampling_mask;
+
+    cout << "Total " << sampled_image << " images" << endl;
+    cout << "Total " << sampled_feature << " keypoints" << endl;
+
+    exec("mv " + feature_descriptor_sample_path + " " + run_param.feature_descriptor_path + "_img-" + toString(sampled_image) + "_feature-" + toString(sampled_feature));
+    feature_descriptor_sample_path = run_param.feature_descriptor_path + "_img-" + toString(sampled_image) + "_feature-" + toString(sampled_feature);
 
     return feature_descriptor_sample_path;
 }
