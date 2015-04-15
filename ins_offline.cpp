@@ -92,8 +92,6 @@ int main(int argc,char *argv[])
             bool save_cluster = true;
             bool save_quantized = true;
             bool save_bow = true;
-            char pack_opt;
-            bool by_block = false;
             size_t block_size = 100;
             switch (menu)
             {
@@ -194,6 +192,16 @@ void LoadDataset(const string& DatasetPath)
             return;
         }
 
+        // Load specific set, if available
+        bool with_set = is_path_exist(run_param.offline_working_path + "/using_poolname.txt");
+        set<string> defined_set;
+        if (with_set)
+        {
+            cout << "Loading specific pool list.."; cout.flush();
+            defined_set = text_readline2set(run_param.offline_working_path + "/using_poolname.txt");
+            cout << "done!" << endl;
+        }
+
         // ======== Load dataset ========
         cout << "Load dataset..";
         cout.flush();
@@ -201,44 +209,52 @@ void LoadDataset(const string& DatasetPath)
 
         vector<string> ImgDirQueue;
 
-        //unsigned char isDir = 0x4; // DT_DIR
-        unsigned char isFile = 0x8; // DT_REG
         char currDir[] = ".";
         char parentDir[] = "..";
-        size_t currParentIdx = ImgParentPaths.size();
+        size_t currParentIdx = ParentPaths.size();
         int pool_id = -1;
 
         // First parent dir
-        vector<int> ImgPoolLevels;
-        ImgParentPaths.push_back(DatasetPath);
+        deque<int> ImgPoolLevels;
+        ParentPaths.push_back(DatasetPath);
         ImgPoolLevels.push_back(0);
 
-        while (currParentIdx < ImgParentPaths.size())
+        while (currParentIdx < ParentPaths.size())
         {
             stringstream CurrDirectory;
-            CurrDirectory << run_param.dataset_root_dir << "/" << ImgParentPaths[currParentIdx];
-
-            // New temporary empty subdir
-            vector<string> new_ImgParentPaths;
-            vector<size_t> new_ImgPoolLevels;
+            CurrDirectory << run_param.dataset_root_dir << "/" << ParentPaths[currParentIdx];
 
             // Directory traverse
-            bool first_file = false;
+            //cout << "dir: " << CurrDirectory.str() << endl;
             DIR* dirp = opendir(CurrDirectory.str().c_str());
             dirent* dp;
+            map<string, string> sorted_file_name;
             while ((dp = readdir(dirp)) != NULL)
             {
-                //cout << static_cast<unsigned>(dp->d_type) << " " << static_cast<unsigned>(DT_REG) << endl;
-                if (dp->d_type == isFile || string::npos != string(dp->d_name).find(".jpg") || string::npos != string(dp->d_name).find(".png") || string::npos != string(dp->d_name).find(".txt")) // Check file (and jpg file, error from some linux)
-                {
+                string file_name = string(dp->d_name);
+                sorted_file_name[file_name] = file_name;
+            }
+            closedir(dirp);
 
-                    //cout << "curr directory: " << CurrDirectory.str() << endl;
-                    //cout << "file: " << string(dp->d_name) << endl;
-                    // Filter preprocessed file
-                    if (string::npos == string(dp->d_name).find("txt") && (run_param.dataset_preset_index != 0 && string::npos == string(dp->d_name).find(".png")) && (run_param.dataset_preset_index != 0 || string::npos == string(dp->d_name).find("edge"))) // filter out edge file for chars74k
+            // New temporary empty subdir
+            bool first_file = false;
+            vector<string> new_ParentPaths;
+            vector<size_t> new_ImgPoolLevels;
+            for (auto sorted_file_name_it = sorted_file_name.begin(); sorted_file_name_it != sorted_file_name.end(); sorted_file_name_it++)
+            {
+                string file_name = sorted_file_name_it->second;
+                cout << "checking.." << file_name << string(20, ' ') << string(file_name.length() + 30, '\b');
+                struct stat st;
+                stat((CurrDirectory.str() + "/" + file_name).c_str(), &st);
+                if (S_ISREG(st.st_mode))    // Check regular file,
+                {
+                    string file_ext = file_name.substr(file_name.rfind('.') + 1);
+                    if ((!str_contains(run_param.dataset_prefix, "ins2013") && file_ext == "jpg") ||
+                        ((str_contains(run_param.dataset_prefix, "chars74k") || str_contains(run_param.dataset_prefix, "ins2013")) && file_ext == "png"))
                     {
-                        ImgLists.push_back(string(dp->d_name));
-                        ImgParentsIdx.push_back(currParentIdx); // lookup index to same parent
+                        //cout << " - file - ext " << file_ext << endl;
+                        ImgLists.push_back(file_name);
+                        Img2ParentsIdx.push_back(currParentIdx); // lookup index to same parent
 
                         // Group dataset into pool_id according to the same pool level
                         if (run_param.group_level != -1 && ImgPoolLevels[currParentIdx] >= run_param.group_level)
@@ -246,47 +262,65 @@ void LoadDataset(const string& DatasetPath)
                             if (!first_file && ImgPoolLevels[currParentIdx] == run_param.group_level) // current pool level is the same as group level
                             {
                                 first_file = true;
-                                ImgListsPoolIds.push_back(++pool_id);
+                                Img2PoolIdx.push_back(++pool_id);
+
+                                // Add map from pool_id to parent_id
+                                Pool2ParentsIdx.push_back(currParentIdx);
                             }
                             else
-                                ImgListsPoolIds.push_back(pool_id);
+                                Img2PoolIdx.push_back(pool_id);
                         }
                         else // In case image is outside pool level
                         {
                             // If group pool level is -1, all the rest images will be in different pool level
                             if (run_param.group_level == -1)
-                                ImgListsPoolIds.push_back(++pool_id);
+                            {
+                                Img2PoolIdx.push_back(++pool_id);
+
+                                // Add map from pool_id to parent_id
+                                Pool2ParentsIdx.push_back(currParentIdx);
+                            }
                             else // if image is outside its pool level, just skip by -1
-                                ImgListsPoolIds.push_back(-1);
+                                Img2PoolIdx.push_back(-1);
                         }
                     }
+                    //else
+                    //    cout << " - skip" << endl;
                 }
-                else // Check directory
+                else if(S_ISDIR(st.st_mode))    // Check directory
                 {
-                    //cout << "curr directory: " << CurrDirectory.str() << endl;
-                    //cout << "directory: " << string(dp->d_name) << endl;
                     // Filter only child directory
-                    if(strcmp(dp->d_name, currDir) && strcmp(dp->d_name, parentDir))
+                    if(strcmp(file_name.c_str(), currDir) && strcmp(file_name.c_str(), parentDir))    // strcmp equal is 1
                     {
+
+                        /// Skip. if not appear in the specified set
+                        if (with_set && defined_set.find(file_name) == defined_set.end())
+                            continue;
+
+                        //cout << " - dir" << endl;
                         // Add sub-dir
                         stringstream SubDir;
-                        SubDir << ImgParentPaths[currParentIdx] << "/" << dp->d_name;
-                        new_ImgParentPaths.push_back(SubDir.str());
+                        SubDir << ParentPaths[currParentIdx] << "/" << file_name;
+                        new_ParentPaths.push_back(SubDir.str());
                         new_ImgPoolLevels.push_back(ImgPoolLevels[currParentIdx] + 1); // next level
                     }
+                    //else
+                    //    cout << " - parent" << endl;
                 }
             }
-            closedir(dirp);
+
             // Insert subdir at under its parent
-            if (new_ImgParentPaths.size() > 0 && new_ImgPoolLevels.size() > 0)
+            if (new_ParentPaths.size() > 0 && new_ImgPoolLevels.size() > 0)
             {
-                ImgParentPaths.insert(ImgParentPaths.begin() + currParentIdx + 1, new_ImgParentPaths.begin(), new_ImgParentPaths.end());
+                ParentPaths.insert(ParentPaths.begin() + currParentIdx + 1, new_ParentPaths.begin(), new_ParentPaths.end());
                 ImgPoolLevels.insert(ImgPoolLevels.begin() + currParentIdx + 1, new_ImgPoolLevels.begin(), new_ImgPoolLevels.end());
+
             }
 
             // Release mem
-            new_ImgParentPaths.clear();
-            new_ImgPoolLevels.clear();
+            vector<string>().swap(new_ParentPaths);
+            vector<size_t>().swap(new_ImgPoolLevels);
+            map<string, string>().swap(sorted_file_name);
 
             // Next parent
             currParentIdx++;
@@ -313,15 +347,22 @@ void LoadDataset(const string& DatasetPath)
     if (ImgLists.size() > 0)
     {
         cout << "== Dataset information ==" << endl;
-        //cout << "Total directory: " << ImgParentPaths.size() << endl;
-        cout << "Total pool: " << ImgListsPoolIds[ImgListsPoolIds.size() - 1] + 1 << endl;
-        cout << "Total image: " << ImgLists.size() << endl;
-
-        // Check existing poolinfo
-        if (is_path_exist(run_param.poolinfo_path))
+        if (!is_path_exist(run_param.poolinfo_path))
         {
+            // Check dataset info from actual dataset
+            cout << "Total pool: " << Img2PoolIdx[Img2PoolIdx.size() - 1] + 1 << endl;
+            cout << "Total image: " << ImgLists.size() << endl;
+        }
+        else
+        {
+            // Check dataset info from pool
             LoadPoolinfo(run_param.poolinfo_path);
+            cout << "Total pool: " << feature_count_per_pool.size() << endl;
+            cout << "Total image: " << feature_count_per_image.size() << endl;
             cout << "Total features: " << total_features << endl;
+
+            //cout << "Total pool2: " << image_count_per_pool.size() << endl;
+            //cout << "Total pool3: " << Pool2ParentsIdx.size() << endl;
         }
     }
     else
@@ -334,8 +375,8 @@ void SaveDatasetList()
     ofstream OutParentFile (run_param.dataset_basepath_path.c_str());
     if (OutParentFile.is_open())
     {
-        for (size_t parent_id = 0; parent_id < ImgParentPaths.size(); parent_id++)
-            OutParentFile << parent_id << ":" << ImgParentPaths[parent_id] << endl;
+        for (size_t parent_id = 0; parent_id < ParentPaths.size(); parent_id++)
+            OutParentFile << parent_id << ":" << ParentPaths[parent_id] << endl;
             // parent_id:parent_path
 
         // Close file
@@ -347,9 +388,9 @@ void SaveDatasetList()
     if (OutImgFile.is_open())
     {
         // Write path to image
-        // pool_id:parent_idx:path_to_image
+        // img-parent:pool-parent:img-pool:path_to_image
         for (size_t image_id = 0; image_id < ImgLists.size(); image_id++)
-            OutImgFile << ImgListsPoolIds[image_id] << ":" << ImgParentsIdx[image_id] << ":" << ImgLists[image_id] << endl;
+            OutImgFile << Img2ParentsIdx[image_id] << ":" << Pool2ParentsIdx[Img2PoolIdx[image_id]] << ":" << Img2PoolIdx[image_id] << ":" << ImgLists[image_id] << endl;
             // parent_id:image_name
 
         // Close file
@@ -371,11 +412,9 @@ void LoadDatasetList()
             {
                 vector<string> split_line;
                 // parent_id:parent_path
-                const char* delimsColon = ":";
+                StringExplode(read_line, ":", split_line);
 
-                string_splitter(read_line, delimsColon, split_line);
-
-                ImgParentPaths.push_back(split_line[1]);
+                ParentPaths.push_back(split_line[1]);
             }
         }
 
@@ -388,6 +427,7 @@ void LoadDatasetList()
     if (InImgFile)
     {
         string read_line;
+        unordered_set<int> pool_set;
         while (!InImgFile.eof())
         {
             getline(InImgFile, read_line);
@@ -399,22 +439,34 @@ void LoadDatasetList()
                 size_t cpos_start = 0;
                 size_t cpos_end = 0;
                 size_t line_size = read_line.length();
-                bool done_pool_id = false;
+                bool done_parent_id = false;
+                bool done_pool2parent_id = false;
                 for (cpos_end = 0; cpos_end < line_size; cpos_end++)
                 {
                     if (read_line[cpos_end] == ':')
                     {
-                        if (!done_pool_id)  // Pool id
+                        int idx = atoi(read_line.substr(cpos_start, cpos_end - cpos_start).c_str());
+                        cpos_start = cpos_end + 1;
+                        if (!done_parent_id)                // Parent id
                         {
-                            ImgListsPoolIds.push_back(atoi(read_line.substr(cpos_start, cpos_end - cpos_start).c_str()));
-                            cpos_start = cpos_end + 1;
-                            done_pool_id = true;
+                            Img2ParentsIdx.push_back(idx);
+                            done_parent_id = true;
                         }
-                        else                // Parent id
+                        else if (!done_pool2parent_id)      // Pool to parent id
                         {
-                            ImgParentsIdx.push_back(atoi(read_line.substr(cpos_start, cpos_end - cpos_start).c_str()));
-                            cpos_start = cpos_end + 1;
-                            break;          // Stop search, the rest is image name
+                            if (pool_set.find(idx) == pool_set.end())
+                            {
+                                pool_set.insert(idx);
+                                Pool2ParentsIdx.push_back(idx);
+                                Pool2ImagesIdxRange.push_back(pair<size_t, size_t>(ImgLists.size(), ImgLists.size()));  // Add pool2image range
+                            }
+                            done_pool2parent_id = true;
+                            Pool2ImagesIdxRange.back().second = ImgLists.size();                                        // Update pool2image range
+                        }
+                        else                                // Image to pool id
+                        {
+                            Img2PoolIdx.push_back(idx);
+                            break;                          // Stop search, the rest is image name
                         }
                     }
                 }
@@ -426,6 +478,10 @@ void LoadDatasetList()
 
         // Close file
         InImgFile.close();
+
+        /*for (auto it = Pool2ImagesIdxRange.begin(); it != Pool2ImagesIdxRange.end(); it++)
+            cout << it->first << " - " << it->second << endl;
+        cout << "Pool2ImagesIdxRange.size():" << Pool2ImagesIdxRange.size() << endl;*/
     }
 }
 
@@ -451,7 +507,7 @@ void ProcessDataset()
         stringstream curr_img_tmp_path;
         stringstream curr_img_tmp_path_edge;
         stringstream curr_img_tmp_path_pre;
-        curr_img_path << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]] << "/" << ImgLists[img_idx];
+        curr_img_path << run_param.dataset_root_dir << "/" << ParentPaths[Img2ParentsIdx[img_idx]] << "/" << ImgLists[img_idx];
         curr_img_tmp_path << str_replace_first(curr_img_path.str(), "dataset", "dataset_tmp");
         curr_img_tmp_path_edge << str_replace_first(curr_img_tmp_path.str(), ".png", "-edge.png");
         curr_img_tmp_path_pre << str_replace_first(curr_img_tmp_path_edge.str(), ".png", "-pre.png");
@@ -548,9 +604,9 @@ void ExtractDataset(bool save_feature)
         stringstream curr_img_path;
         stringstream curr_img_export_parent;
         stringstream curr_img_export_path;
-        curr_img_parent << run_param.dataset_root_dir << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        curr_img_parent << run_param.dataset_root_dir << "/" << ParentPaths[Img2ParentsIdx[img_idx]];
         curr_img_path << curr_img_parent.str() << "/" << ImgLists[img_idx];
-        curr_img_export_parent << str_replace_first(run_param.dataset_root_dir, "dataset", "dataset_feature") << "/" << run_param.feature_name << "/" << ImgParentPaths[ImgParentsIdx[img_idx]];
+        curr_img_export_parent << run_param.dataset_feature_root_dir << "/" << run_param.feature_name << "/" << ParentPaths[Img2ParentsIdx[img_idx]];
         curr_img_export_path << curr_img_export_parent.str() << "/" << ImgLists[img_idx] << ".sifthesaff";
 
 
