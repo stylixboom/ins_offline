@@ -1560,11 +1560,15 @@ void ImageFeaturesQuantization(bool save_quantized)
     ann.init(run_param);
 
     /// Per image vector quantization
-    // Feature vector per image preparation
+    // Feature vector per block preparation
     size_t accumulative_feature_amount = 0;
     bool is_write = false;
-    int quantization_buffer_limit = 200;
-    int quantization_buffer_left = quantization_buffer_limit;
+    size_t quantization_buffer_limit = 1024;
+    size_t user_buffer;
+    cout << "Do you want to set buffer size (default:1024)? 0 = no | #number = yes:"; cout.flush();
+    cin >> user_buffer;
+    if (user_buffer > 0)
+        quantization_buffer_limit = user_buffer;
     //int dimension = dataset_descriptor.cols;
     /// Resuming checkpoint
     // Checking existing quantized data
@@ -1625,123 +1629,234 @@ void ImageFeaturesQuantization(bool save_quantized)
 
         cout << "Resuming at image_id:" << resume_idx << endl;
 	}
-	if (resume_idx < feature_count_per_image.size())
-    {
-        size_t current_feature_amount = 0;
+/*
+	// Repair
+	is_write = true;
+	cout << "---- REPAIR MODE ----" << endl;
+	cout << "Enter img_id:"; cout.flush();
+	size_t rp_img_idx = 0;
+	cin >> rp_img_idx;
+	{
+	    if (!dataset_quantized_offset_ready)
+            LoadQuantizedDatasetOffset();
+
+	    // Accumulating feature amount
+	    accumulative_feature_amount = 0;
+	    for (size_t image_id = 0; image_id < rp_img_idx; image_id++)
+            accumulative_feature_amount += feature_count_per_image[image_id];
+
+	    size_t current_feature_amount = feature_count_per_image[rp_img_idx];
 
         // Resuming from resume_idx
         vector<int> quantized_counts;         // Total number per each quantized (one quantized is one image)
         vector<int*> quantized_indices;
         vector<float*> quantized_dists;
-        for (size_t image_id = resume_idx; image_id < feature_count_per_image.size(); image_id++)
+        Matrix<float> dataset_descriptor;
+
+        // Load specific dataset_descriptor
+        //LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_DESC, dataset_descriptor);
+        SIFThesaff runtime_sift;
+        runtime_sift.init(run_param.colorspace, run_param.normpoint, run_param.rootsift);
+        cout << "Extracting image: " << run_param.dataset_root_dir << "/" << ParentPaths[Img2ParentsIdx[rp_img_idx]] << "/" << ImgLists[rp_img_idx] << endl;
+        runtime_sift.extractPerdochSIFT(run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[rp_img_idx]] + "/" + ImgLists[rp_img_idx]);
+        int sift_len = SIFThesaff::GetSIFTD();
+        float* desc_dat = new float[runtime_sift.num_kp * sift_len];
+        for (int kp_idx = 0; kp_idx < runtime_sift.num_kp; kp_idx++)
+            for (int desc_idx = 0; desc_idx < sift_len; desc_idx++)
+            desc_dat[kp_idx * sift_len + desc_idx] = runtime_sift.desc[kp_idx][desc_idx];
+
+        dataset_descriptor = Matrix<float>(desc_dat, runtime_sift.num_kp, sift_len);
+
+        //Matrix<float> feature_data(current_feature, current_feature_amount, dimension);
+        Matrix<int> result_index; // size = feature_amount x knn
+        Matrix<float> result_dist;
+
+        ann.quantize(dataset_descriptor, current_feature_amount, result_index, result_dist);
+
+        // Keep result
+        // Keep in a buffer
+        quantized_counts.push_back(current_feature_amount);
+        quantized_indices.push_back(result_index.ptr());
+        quantized_dists.push_back(result_dist.ptr());
+
+        // Flushing buffer to disk
+        size_t current_quantized_offset = dataset_quantized_offset[rp_img_idx];
+
+        fstream OutFile(run_param.quantized_path.c_str(), ios::binary | ios::in | ios::out);
+        if (OutFile.is_open())
         {
-            Matrix<float> dataset_descriptor;
+            char rp = 'n';
+            // Quantize index and distance
+            for (size_t quantized_idx = 0; quantized_idx < quantized_counts.size(); quantized_idx++)
+            {
+                // Feature size
+                OutFile.seekg(current_quantized_offset, OutFile.beg);
+                size_t feature_count = 0;
+                OutFile.read((char*)(&feature_count), sizeof(feature_count));
+                cout << "Replace feature_count " << feature_count << " -> " << quantized_counts[quantized_idx] << " ? [y|n]"; cout.flush();
+                cin.clear(); cin >> rp;
+                if (rp == 'y')
+                {
+                    OutFile.seekp(current_quantized_offset, OutFile.beg);
+                    feature_count = quantized_counts[quantized_idx];
+                    OutFile.write(reinterpret_cast<char*>(&feature_count), sizeof(feature_count));
+                }
+                current_quantized_offset += sizeof(feature_count);
 
-            current_feature_amount = feature_count_per_image[image_id];
+                //cout << "feature_count: " << feature_count << endl;
+                // Feature quantized index and distance to index
+                for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
+                {
+                    // Index
+                    cout << "feature_idx:" << feature_idx << endl;
+                    OutFile.seekg(current_quantized_offset, OutFile.beg);
+                    int quantized_index = 0;
+                    OutFile.read((char*)(&quantized_index), sizeof(quantized_index));
+                    if (quantized_index != quantized_indices[quantized_idx][feature_idx])
+                    {
+                        if (rp == 'y')
+                        {
+                            cout << "Replace quantized_index " << quantized_index << " -> " << quantized_indices[quantized_idx][feature_idx] << endl;
+                            OutFile.seekp(current_quantized_offset, OutFile.beg);
+                            quantized_index = quantized_indices[quantized_idx][feature_idx];
+                            OutFile.write(reinterpret_cast<char*>(&quantized_index), sizeof(quantized_index));
+                        }
+                    }
+                    current_quantized_offset += sizeof(quantized_index);
+                    // Dist
+                    OutFile.seekg(current_quantized_offset, OutFile.beg);
+                    float quantized_dist = 0;
+                    OutFile.read((char*)(&quantized_dist), sizeof(quantized_dist));
+                    if (quantized_index != quantized_indices[quantized_idx][feature_idx])
+                    {
+                        if (rp == 'y')
+                        {
+                            cout << "Replace quantized_dist " << quantized_dist << " -> " << quantized_dists[quantized_idx][feature_idx] << endl;
+                            OutFile.seekp(current_quantized_offset, OutFile.beg);
+                            quantized_dist = quantized_dists[quantized_idx][feature_idx];
+                            OutFile.write(reinterpret_cast<char*>(&quantized_dist), sizeof(quantized_dist));
+                        }
+                    }
+                    current_quantized_offset += sizeof(quantized_dist);
 
-            // Old version
-            /* Slice features per image from full-size dataset_descriptor to be quantized
-            // Prepare feature vector to be quantized
-            float* dataset_feature_idx = dataset_descriptor.ptr();
-            float* current_feature = new float[current_feature_amount * dimension];
-            for (int row = 0; row < current_feature_amount; row++)
-                for (int col = 0; col < dimension; col++)
-                    current_feature[row * dimension + col] = dataset_feature_idx[(accumulative_feature_amount + row) * dimension + col];
-            */
-            // New version
-            // Load specific dataset_descriptor
-            LoadFeature(accumulative_feature_amount, current_feature_amount, LOAD_DESC, dataset_descriptor);
+                    //cout << "quantized_index: " << quantized_index << " quantized_dist: " << quantized_dist << endl;
+                }
+            }
+
+            // Close file
+            OutFile.close();
+        }
+
+        /// Clear written quantized buffer
+        // Clear buffer
+        for (size_t quantized_idx = 0; quantized_idx < quantized_indices.size(); quantized_idx++)
+        {
+            delete[] quantized_indices[quantized_idx];
+            delete[] quantized_dists[quantized_idx];
+        }
+        quantized_indices.clear();
+        quantized_dists.clear();
+        // Clear size
+        quantized_counts.clear();
+
+        // Release memory
+        delete[] dataset_descriptor.ptr();
+
+        cout << "done!" << endl;
+
+        // Stop the rest
+        return;
+    }
+*/
+
+    size_t dataset_size = feature_count_per_image.size();
+	if (resume_idx < dataset_size)
+    {
+        // Resuming from resume_idx
+        vector<int> quantized_counts;           // Total number of feature per image
+        vector<int*> quantized_indices;         // quantized result for this block, one result int* is one image
+        vector<float*> quantized_dists;         // quantized distance for this block, one result int* is one image
+        for (size_t image_id = resume_idx; image_id < dataset_size; )
+        {
+            Matrix<float> dataset_descriptor_block;
+            size_t block_feature_count = 0;
+
+            // Calculating block_count
+            size_t block_available = dataset_size - image_id;
+            if (block_available > quantization_buffer_limit)
+                block_available = quantization_buffer_limit;
+            for (size_t block_idx = 0; block_idx < block_available; block_idx++)
+            {
+                size_t current_feature_amount = feature_count_per_image[image_id++];
+                block_feature_count += current_feature_amount;
+                // Keep feature count
+                quantized_counts.push_back(current_feature_amount);
+            }
+
+            // Load specific dataset_descriptor as a block
+            LoadFeature(accumulative_feature_amount, block_feature_count, LOAD_DESC, dataset_descriptor_block);
 
             // Accumulate offset of total feature per image for the next load
-            accumulative_feature_amount += current_feature_amount;
+            accumulative_feature_amount += block_feature_count;
 
-            //Matrix<float> feature_data(current_feature, current_feature_amount, dimension);
-            Matrix<int> result_index; // size = feature_amount x knn
-            Matrix<float> result_dist;
+            // Quantizing block
+            Matrix<int> block_result_index; // size = feature_amount x knn
+            Matrix<float> block_result_dist;
+            ann.quantize(dataset_descriptor_block, block_feature_count, block_result_index, block_result_dist);
 
-            ann.quantize(dataset_descriptor, current_feature_amount, result_index, result_dist);
-
-            // Debug
-            /*for(size_t row = 0; row < 3; row++)
+            // Split results into each separated image
+            size_t done_feature_offset = 0;
+            int* block_result_index_ptr = block_result_index.ptr();
+            float* block_result_dist_ptr = block_result_dist.ptr();
+            for (size_t block_idx = 0; block_idx < block_available; block_idx++)
             {
-                for(size_t col = 0; col < dimension; col++)
-                {
-                    cout << feature_data.ptr()[row * dimension + col] << " ";
-                    if(col == dimension - 1)
-                        cout << endl;
-                }
-            }*/
+                size_t feature_count = quantized_counts[block_idx];
 
-            // Keep result
-            // Keep in a buffer
-            quantized_counts.push_back(current_feature_amount);
-            quantized_indices.push_back(result_index.ptr());
-            quantized_dists.push_back(result_dist.ptr());
-            /*int* result_index_idx = result_index.ptr();
-            float* result_dist_idx = result_dist.ptr();
-            // row base result
-            // col is nn number
-            size_t knn = ann.knn;
-            for(size_t col = 0; col < knn; col++)
-            {
-                vector<int> result_index_vector;
-                vector<float> result_dist_vector;
-                // For one image
-                for(size_t row = 0; row < result_index.rows; row++)
+                int* result_index = new int[feature_count];
+                float* result_dist = new float[feature_count];
+
+                for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
                 {
-                    result_index_vector.push_back(result_index_idx[row * knn + col]);
-                    result_dist_vector.push_back(result_dist_idx[row * knn + col]);
+                    result_index[feature_idx] = block_result_index_ptr[done_feature_offset + feature_idx];
+                    result_dist[feature_idx] = block_result_dist_ptr[done_feature_offset + feature_idx];
                 }
+                done_feature_offset += feature_count;
+
+                // Keep result
                 // Keep in a buffer
-                quantized_indices.push_back(result_index_vector);
-                quantized_dists.push_back(result_dist_vector);
+                quantized_indices.push_back(result_index);
+                quantized_dists.push_back(result_dist);
             }
-            */
 
-            // Check quantization buffer reach its limit, or reach the last images
-            if (--quantization_buffer_left == 0 || image_id == feature_count_per_image.size() - 1)
+            // Flushing buffer to disk
+            SaveQuantizedDataset(quantized_counts, quantized_indices, quantized_dists, is_write);
+            is_write = true;
+
+            /// Clear written quantized buffer
+            // Clear buffer
+            for (size_t quantized_idx = 0; quantized_idx < quantized_indices.size(); quantized_idx++)
             {
-                // Flushing buffer to disk
-                SaveQuantizedDataset(quantized_counts, quantized_indices, quantized_dists, is_write);
-
-                /// Clear written quantized buffer
-                // Clear size
-                quantized_counts.clear();
-                // Clear buffer
-                for (size_t quantized_idx = 0; quantized_idx < quantized_counts.size(); quantized_idx++)
-                {
-                    delete[] quantized_indices[quantized_idx];
-                    delete[] quantized_dists[quantized_idx];
-                }
-                quantized_indices.clear();
-                quantized_dists.clear();
-
-                is_write = true;
-                quantization_buffer_left = quantization_buffer_limit;
+                delete[] quantized_indices[quantized_idx];
+                delete[] quantized_dists[quantized_idx];
             }
+            vector<int*>().swap(quantized_indices);
+            vector<float*>().swap(quantized_dists);
+            // Clear size
+            vector<int>().swap(quantized_counts);
 
-            //percentout(image_id, feature_count_per_image.size(), 1);
-            percentout_timeleft(image_id, resume_idx, feature_count_per_image.size(), startTime, 20);
+
+            percentout_timeleft(image_id, resume_idx, dataset_size, startTime, 4);
 
             // Release memory
-            delete[] dataset_descriptor.ptr();
+            delete[] dataset_descriptor_block.ptr();
+            delete[] block_result_index.ptr();
+            delete[] block_result_dist.ptr();
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
     else
         cout << "Quantizing not necessary. Dataset has been quantized." << endl;
 
-/*
-    // Preview
-    for(size_t query_idx = 0; query_idx < 2; query_idx++)
-    {
-        for(size_t result_idx = 0; result_idx < quantized_indices[query_idx].size(); result_idx++)
-        {
-            cout << quantized_indices[query_idx][result_idx] << " ";
-        }
-        cout << endl;
-    }
-*/
 /*
     // Accessing data in matrix
     int* result_index_idx = result_index.ptr();
@@ -1834,7 +1949,7 @@ void SaveQuantizedDataset(const vector<int>& quantized_counts, const vector<int*
         OutFile.close();
 
         // Release memory
-        quantized_offset.clear();
+        vector<size_t>().swap(quantized_offset);
     }
 }
 
@@ -1898,7 +2013,7 @@ void ReleaseQuantizedOffset()
     {
         // Clear offset
         dataset_quantized_offset_ready = false;
-        dataset_quantized_offset.clear();
+        vector<size_t>().swap(dataset_quantized_offset);
     }
 }
 
@@ -1981,11 +2096,12 @@ void Bow(bool save_bow)
 
         cout << "Resuming at image_id:" << resume_idx << endl;
 	}
-	cout << "feature_count_per_image.size(): " << feature_count_per_image.size() << endl;
+	//cout << "feature_count_per_image.size(): " << feature_count_per_image.size() << endl;
+	//cout << "feature_count_per_pool.size(): " << feature_count_per_pool.size() << endl;
     if (resume_idx < feature_count_per_image.size())
     {
         int current_feature_amount = 0;
-        int current_pool_feature_amount = 0;
+        int current_pool_image_count = 0;
 
         /// For each image
         vector<int> quantized_counts;         // Total number per each quantized (one quantized is one image)
@@ -2030,20 +2146,34 @@ void Bow(bool save_bow)
             }
             accumulative_feature_amount += current_feature_amount;
             // Accumulate pool counter
-            current_pool_feature_amount += current_feature_amount;
+            current_pool_image_count++;
 
             // Build BoW
-            bow_builder.build_bow(quantized_indices[0], features);
+            bow_builder.build_bow(quantized_indices[0], features, Img2PoolIdx[image_id]);   // Build with image_id (no pooling) pool_id (pooling)
+
+            // Powerlaw
+            if (run_param.powerlaw_enable)
+                bow_builder.rooting_lastbow();
+
+            /****
+            // Calculate total image per pool
+            for (size_t image_id = 0; image_id < Img2PoolIdx.size(); image_id++)
+            {
+                if (image_count_per_pool.size() < size_t(Img2PoolIdx[image_id] + 1))
+                    image_count_per_pool.push_back(0);
+                image_count_per_pool[Img2PoolIdx[image_id]]++;
+            }*/
 
             // If total features reach total features in the pool, do pooling then flush to disk
-            if (current_pool_feature_amount == feature_count_per_pool[ImgListsPoolIds[image_id]])
+            if (current_pool_image_count == image_count_per_pool[Img2PoolIdx[image_id]])
             {
                 // Flush bow to disk
                 bow_builder.flush_bow(is_write);
                 if (run_param.pooling_enable)
                 {
                     // Pooling from internal multiple bow
-                    bow_builder.build_pool();
+                    // with internally logtf_unitnormalize before do pooling
+                    bow_builder.build_pool(run_param.pooling_mode);
                     // Flush bow_pool to disk
                     bow_builder.flush_bow_pool(is_write);
                 }
@@ -2051,7 +2181,7 @@ void Bow(bool save_bow)
                 is_write = true;
 
                 // Reset pool counter
-                current_pool_feature_amount = 0;
+                current_pool_image_count = 0;
 
                 // Release memory
                 bow_builder.reset_bow();
@@ -2072,9 +2202,9 @@ void Bow(bool save_bow)
                 delete[] quantized_indices[quantized_idx];
                 delete[] quantized_dists[quantized_idx];
             }
-            quantized_counts.clear();
-            quantized_indices.clear();
-            quantized_dists.clear();
+            vector<int>().swap(quantized_counts);
+            vector<int*>().swap(quantized_indices);
+            vector<float*>().swap(quantized_dists);
         }
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
@@ -2089,7 +2219,8 @@ void Bow(bool save_bow)
 void build_invert_index()
 {
     cout << "Build Invert Index" << endl;
-    cout << "Path " << run_param.inv_path << endl;
+    cout << "Header: " << run_param.inv_header_path << endl;
+    cout << "Data: " << run_param.inv_data_path << endl;
 
     // Checking bag_of_word avalibality
     if (!is_path_exist(run_param.bow_path))
@@ -2100,17 +2231,14 @@ void build_invert_index()
     else
         cout << "BOW OK" << endl;
 
-    // Provide invert index directory
-    make_dir_available(run_param.inv_path);
-
-    char opt = ' ';
+    char word_major_opt = ' ';
     size_t word_buffer_size = run_param.CLUSTER_SIZE;
     size_t word_start = 0;
     size_t word_end = run_param.CLUSTER_SIZE - 1;
     cout << "Since large scale inverted index may have a problem with slow I/O." << endl;
     cout << "Do you want to build inverted index by word-major? [y|n]:"; cout.flush();
-    cin >> opt;
-    if (opt == 'y')
+    cin >> word_major_opt;
+    if (word_major_opt == 'y')
     {
         cout << "Please specify.." << endl;
         cout << "Total words per one flush: "; cout.flush();
@@ -2122,75 +2250,926 @@ void build_invert_index()
         if (word_end > run_param.CLUSTER_SIZE - 1)
             word_end = run_param.CLUSTER_SIZE - 1;
     }
+
+    size_t bow_buffer_limit = 1024;
+    size_t user_buffer;
+    cout << "Do you want to set buffer size (default:1024)? 0 = no | #number = yes:"; cout.flush();
+    cin >> user_buffer;
+    if (user_buffer > 0)
+        bow_buffer_limit = user_buffer;
+
+    bool inv_resume = false;
+    if (word_start > 0)
+    {
+        inv_resume = true;
+        cout << "Resume at " << word_start << endl;
+    }
     cout << "Building inverted index database.." << endl;
     // Create invert index database
     invert_index invert_hist;
-    invert_hist.init(run_param);
+    invert_hist.init(run_param, inv_resume);
     // Create bow builder object (use as bow loader)
     bow bow_builder;
     bow_builder.init(run_param);
+
+    // Checking BOW file integrity
+    if (image_count_per_pool.size() != bow_builder.get_running_bow_size())
+    {
+        cout << "Bow/BowPool size is incorrect" << endl;
+        cout << "expected:" << image_count_per_pool.size() << " actual:" << bow_builder.get_running_bow_size() << endl;
+        exit(EXIT_FAILURE);
+    }
+
     startTime = CurrentPreciseTime();
 
     size_t pool_size = feature_count_per_pool.size();
     while (word_start <= word_end)
     {
         size_t word_lower_bound = word_start;
-        size_t word_upper_bound = word_start + word_buffer_size;
+        size_t word_upper_bound = word_start + word_buffer_size - 1;
         if (word_upper_bound > run_param.CLUSTER_SIZE)
-            word_upper_bound = run_param.CLUSTER_SIZE;
+            word_upper_bound = run_param.CLUSTER_SIZE - 1;
         timespec block_start = CurrentPreciseTime();
         cout << "[" << word_lower_bound << " - " << word_upper_bound << "] "; cout.flush();
 
-        // Set load filter
-        bow_builder.set_load_filter(word_lower_bound, word_upper_bound);
-
         /// Building inverted index for each pool
-        for (size_t pool_id = 0; pool_id < pool_size; pool_id++)
+        // Read existing bow
+        for (size_t pool_id = 0; pool_id < pool_size; )
         {
-            // Read existing bow
-            vector<bow_bin_object*> read_bow;
-            if (run_param.pooling_enable)
-                bow_builder.load_specific_bow_pool(pool_id, read_bow);  // <---- This create kp new memory inside, please delete
-            else
-                bow_builder.load_specific_bow(pool_id, read_bow);       // <---- This create kp new memory inside, please delete
-            //cout << "pool_id: " << pool_id << " read_bow.size(): " << read_bow.size() << endl;
+            // Prepare block space
+            size_t block_available = pool_size - pool_id;
+            if (block_available > bow_buffer_limit)
+                block_available = bow_buffer_limit;
+            vector<size_t> read_id_list(block_available);
+            vector< vector<bow_bin_object*> > read_bows(block_available);
+            for (size_t block_idx = 0; block_idx < block_available; block_idx++)
+                read_id_list[block_idx] = pool_id++;
+            // Load
+            bow_builder.load_running_bows(read_id_list, read_bows);    // <---- This create kp new memory inside, please delete
 
-            // tf and normalize
-            bow_builder.logtf_unitnormalize(read_bow);
+            // Adding to inverted index
+            for (size_t block_idx = 0; block_idx < block_available; block_idx++)
+            {
+                vector<bow_bin_object*>& read_bow = read_bows[block_idx];
 
-            // Add to inverted hist
-            invert_hist.add(pool_id, read_bow);
+                // Normalization before use
+                bow_builder.logtf_unitnormalize(read_bow);
 
-            // Release bow_bin_object
-            // since invert_hist use just feature_object and kp[]
-            // Then create internal new dataset_object()
-            // Deleting bow_bin_object is necessary here
-            size_t bin_size = read_bow.size();
-            for (size_t bin_id = 0; bin_id < bin_size; bin_id++)
-                delete read_bow[bin_id];                // delete bow_bin_object
+                // Filter out of range cluster
+                if (word_major_opt == 'y')
+                    bow_builder.bow_filter(read_bow, word_lower_bound, word_upper_bound);
+
+                // Add to inverted hist
+                invert_hist.add(read_id_list[block_idx], read_bow);
+
+                // Release bow_bin_object
+                // since invert_hist use just feature_object and kp[]
+                // Then it create an internal new dataset_object()
+                // Deleting bow_bin_object is necessary here
+                size_t bin_size = read_bow.size();
+                for (size_t bin_id = 0; bin_id < bin_size; bin_id++)
+                    delete read_bow[bin_id];                // delete bow_bin_object
+                vector<bow_bin_object*>().swap(read_bow);
+            }
+            // Release memory
+            vector<size_t>().swap(read_id_list);
+            vector< vector<bow_bin_object*> >().swap(read_bows);
 
             //percentout(pool_id, feature_count_per_pool.size(), 20);
-            percentout_timeleft(pool_id, 0, pool_size, block_start, 20);
+            percentout_timeleft(pool_id, 0, pool_size, block_start, 1);
         }
         // Flush to disk
         invert_hist.flush();
 
         // Continue next block
-        word_start = word_upper_bound;
+        word_start = word_upper_bound + 1;
 
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(block_start) << " s)" << endl;
     }
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 
     // Rebuild header
+    char rebuild_opt = 'n';
     cout << "Do you want to re-build inverted index header? [y|n]:"; cout.flush();
-    cin >> opt;
+    cin >> rebuild_opt;
     startTime = CurrentPreciseTime();
-    if (opt == 'y')
+    if (rebuild_opt == 'y')
     {
         cout << "Building inverted index header.."; cout.flush();
         invert_hist.build_header_from_bow_file();
         cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
     }
+}
+
+
+// Compatible checking
+void SiftCheck()
+{
+    cout << "Checking.."; cout.flush();
+    startTime = CurrentPreciseTime();
+    #pragma omp parallel shared(startTime,run_param,ParentPaths,Img2ParentsIdx,ImgLists)
+    {
+        #pragma omp for schedule(dynamic,1) nowait
+        for (size_t img_idx = 0; img_idx < ImgLists.size(); img_idx++)
+        {
+            SIFThesaff siftchecker;
+            stringstream curr_img_feature_path;
+            curr_img_feature_path << run_param.dataset_feature_root_dir << "/" << run_param.feature_name << "/" << ParentPaths[Img2ParentsIdx[img_idx]] << "/" << ImgLists[img_idx] << ".sifthesaff";
+
+            siftchecker.init(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
+            siftchecker.checkNumKp(curr_img_feature_path.str());
+
+            percentout_timeleft(img_idx, 0, ImgLists.size(), startTime, 20);
+        }
+    }
+    cout << "done!" << endl;
+}
+
+void SiftPackRepair()
+{
+    size_t img_idx;
+    cout << "Please input img_idx to be repaired: "; cout.flush();
+    cin >> img_idx;
+
+    cout << "Start extracting.."; cout.flush();
+    string img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[img_idx]] + "/" + ImgLists[img_idx];
+    SIFThesaff siftextract;
+    siftextract.init(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
+    siftextract.extractPerdochSIFT(img_path);
+    cout << "done!" << endl;
+
+    if (siftextract.num_kp == feature_count_per_image[img_idx])
+    {
+        cout << "Start updating.."; cout.flush();
+        // Packing feature
+        int sift_head_len = SIFThesaff::GetSIFTHeadSize();
+        int sift_dim = SIFThesaff::GetSIFTD();
+        float* kp_dat = new float[siftextract.num_kp * sift_head_len];
+        float* desc_dat = new float[siftextract.num_kp * sift_dim];
+        for(int row = 0; row < siftextract.num_kp; row++)
+        {
+            // Slowdown by copying here***
+
+            //== keypoint
+            for(int col = 0; col < sift_head_len; col++)
+                kp_dat[row * sift_head_len + col] = siftextract.kp[row][col];
+
+            //== descriptor
+            for(int col = 0; col < sift_dim; col++)
+                desc_dat[row * sift_dim + col] = siftextract.desc[row][col];
+        }
+
+        // Finding offset start
+        size_t accumulated_offset = 0;
+        for (size_t id = 0; id < img_idx; id++)
+            accumulated_offset += feature_count_per_image[id];
+
+        HDF_update_row_2DFLOAT(run_param.feature_keypoint_path, "keypoint", kp_dat, accumulated_offset, siftextract.num_kp, sift_head_len);
+        HDF_update_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", desc_dat, accumulated_offset, siftextract.num_kp, sift_dim);
+        cout << "done!" << endl;
+
+        // Release memory
+        delete[] kp_dat;
+        delete[] desc_dat;
+    }
+    else
+    {
+        cout << "Total keypoint is not equal siftextract.num_kp != feature_count_per_image[img_idx] - " << siftextract.num_kp  << " != " << feature_count_per_image[img_idx] << endl;
+    }
+}
+
+void PoolCheck()
+{
+    if (is_path_exist(run_param.poolinfo_path))
+    {
+        LoadPoolinfo(run_param.poolinfo_path);
+
+        cout << "Checking total features from feature_count_per_image.."; cout.flush();
+        size_t sum_features = 0;
+        for (size_t img_idx = 0; img_idx < feature_count_per_image.size(); img_idx++)
+            sum_features += feature_count_per_image[img_idx];
+        if (sum_features == total_features)
+            cout << "done!" << endl;
+        else
+            cout << "error, sum_features != total_features" << endl;
+
+        cout << "Checking total features from feature_count_per_pool.."; cout.flush();
+        sum_features = 0;
+        for (size_t pool_idx = 0; pool_idx < feature_count_per_pool.size(); pool_idx++)
+            sum_features += feature_count_per_pool[pool_idx];
+        if (sum_features == total_features)
+            cout << "done!" << endl;
+        else
+            cout << "error, sum_features != total_features" << endl;
+
+        cout << "Checking total images.."; cout.flush();
+        size_t sum_images = 0;
+        for (size_t pool_idx = 0; pool_idx < image_count_per_pool.size(); pool_idx++)
+            sum_images += image_count_per_pool[pool_idx];
+        if (sum_images == feature_count_per_image.size())
+            cout << "done!" << endl;
+        else
+            cout << "error, sum_images != feature_count_per_image.size()" << endl;
+
+        /*cout << "Checking image_count_per_pool.."; cout.flush();
+        for (size_t pool_idx = 0; pool_idx < image_count_per_pool.size(); pool_idx++)
+        {
+            if (1 == image_count_per_pool[pool_idx])
+                cout << "pool is one at " << ParentPaths[Pool2ParentsIdx[pool_idx]] << " " << Pool2ParentsIdx[pool_idx] << " " << pool_idx << " - " << image_count_per_pool[pool_idx] << endl;
+            if (0 == image_count_per_pool[pool_idx])
+                cout << "pool is zero at " << ParentPaths[Pool2ParentsIdx[pool_idx]] << " " << Pool2ParentsIdx[pool_idx] << " " << pool_idx << " - " << image_count_per_pool[pool_idx] << endl;
+        }
+        cout << "done!" << endl;*/
+
+        cout << "Checking feature per pool.."; cout.flush();
+        for (size_t pool_idx = 0, img_idx = 0; pool_idx < image_count_per_pool.size(); pool_idx++)
+        {
+            int curr_total_features = 0;
+            for (int sub_img_idx = 0; sub_img_idx < image_count_per_pool[pool_idx]; sub_img_idx++)
+                curr_total_features += feature_count_per_image[sub_img_idx + img_idx];
+            if (curr_total_features != feature_count_per_pool[pool_idx])
+            {
+                cout << "Poolinfo is wrong at pool " << pool_idx << " " << curr_total_features << "!=" << feature_count_per_pool[pool_idx] << endl;
+                cout << "Parent " << ParentPaths[Pool2ParentsIdx[pool_idx]] << endl;
+            }
+            img_idx += image_count_per_pool[pool_idx];
+        }
+        cout << "done!" << endl;
+    }
+    else
+        cout << "Pooling info not found" << endl;
+
+    char rp_opt = 'n';
+    cout << "Do you want to re-build or repair poolinfo? [y|n]:"; cout.flush();
+    cin >> rp_opt;
+    if (rp_opt == 'y')
+        PoolRepair();
+}
+
+void PoolRepair()
+{
+    cout << "Repairing pool..";
+    cout.flush();
+    startTime = CurrentPreciseTime();
+
+    // Clear previous value
+    vector<int>().swap(feature_count_per_pool);
+    vector<int>().swap(image_count_per_pool);
+    vector<int>().swap(feature_count_per_image);
+
+    /// Preparing poolinfo
+    for (size_t pool_id = 0; pool_id < Pool2ParentsIdx.size(); pool_id++)
+    {
+        feature_count_per_pool.push_back(0);
+        image_count_per_pool.push_back(0);
+    }
+    for (size_t image_id = 0; image_id < ImgLists.size(); image_id++)
+        feature_count_per_image.push_back(0);
+
+    /// Parallel importing sift
+    #pragma omp parallel shared(feature_count_per_pool,feature_count_per_image,image_count_per_pool,run_param,ParentPaths,Img2ParentsIdx,ImgLists)
+    {
+        #pragma omp for schedule(dynamic,1)
+        for (size_t img_idx = 0; img_idx < ImgLists.size(); img_idx++)
+        {
+            string curr_img_feature_path = run_param.dataset_feature_root_dir + "/" + run_param.feature_name + "/" + ParentPaths[Img2ParentsIdx[img_idx]] + "/" + ImgLists[img_idx] + ".sifthesaff";
+
+            SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
+            sifthesaff_dataset.checkNumKp(curr_img_feature_path);
+
+            /// Packing feature
+            int num_kp = sifthesaff_dataset.num_kp;
+
+            /// Building Poolinfo
+            #pragma omp atomic
+            feature_count_per_pool[Img2PoolIdx[img_idx]] += num_kp; // Accumulating feature count in the pool
+            feature_count_per_image[img_idx] = num_kp;              // Keep feature for each image
+            #pragma omp atomic
+            image_count_per_pool[Img2PoolIdx[img_idx]]++;           // Accumulating total image per pool
+
+            percentout_timeleft(img_idx, 0, ImgLists.size(), startTime, 20);
+        }
+    }
+    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
+
+    // Save Poolinfo
+    SavePoolinfo(run_param.poolinfo_path);
+}
+
+void QuantizedCorrectnessCheck()
+{/*
+    // Quantized version 1
+    size_t q_datacount_v1;
+    vector<int> q_count_v1;
+    vector<vector<int>> q_idx_v1;
+    vector<vector<float>> q_dist_v1;
+    ifstream V1File ((run_param.quantized_path + "_v1").c_str(), ios::binary);
+    if (V1File)
+    {
+        cout << "Reading quantized_v1.." << endl;
+        // Dataset size
+        V1File.read((char*)(&q_datacount_v1), sizeof(q_datacount_v1));
+
+        timespec start_v1 = CurrentPreciseTime();
+        // Indices
+        for (size_t dataset_id = 0; dataset_id < q_datacount_v1; dataset_id++)
+        {
+            // Feature size
+            size_t feature_count;
+            V1File.read((char*)(&feature_count), sizeof(feature_count));
+            q_count_v1.push_back(feature_count);
+
+            // Feature quantized index and distance to index
+            vector<int> q_sub_idx_v1;
+            vector<float> q_sub_dist_v1;
+            for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
+            {
+                // Index
+                int index_data;
+                V1File.read((char*)(&index_data), sizeof(index_data));
+                q_sub_idx_v1.push_back(index_data);
+                // Dist
+                float dist_data;
+                V1File.read((char*)(&dist_data), sizeof(dist_data));
+                q_sub_dist_v1.push_back(dist_data);
+
+                if (size_t(index_data) > run_param.CLUSTER_SIZE - 1)
+                    cout << "wrong cluster_id:" << index_data << " img_id:" << dataset_id << " path:" << ParentPaths[Img2ParentsIdx[dataset_id]] << "/" << ImgLists[dataset_id] << endl;
+            }
+            q_idx_v1.push_back(q_sub_idx_v1);
+            q_dist_v1.push_back(q_sub_dist_v1);
+
+            percentout_timeleft(dataset_id, 0, q_datacount_v1, start_v1, 20);
+        }
+
+        // Close file
+        V1File.close();
+    }
+*/
+    if (!dataset_quantized_offset_ready)
+        LoadQuantizedDatasetOffset();
+    // Quantized version 2
+    size_t q_datacount_v2;
+    vector<int> q_count_v2;
+    vector<vector<int>> q_idx_v2;
+    vector<vector<float>> q_dist_v2;
+    ifstream V2File ((run_param.quantized_path + "_v2").c_str(), ios::binary);
+    if (V2File)
+    {
+        cout << "Reading quantized_v2.." << endl;
+
+        // Dataset size
+        V2File.read((char*)(&q_datacount_v2), sizeof(q_datacount_v2));
+
+        timespec start_v2 = CurrentPreciseTime();
+        cout << "Skip to:"; cout.flush();
+        size_t to_id = 0;
+        cin >> to_id;
+        cout << "dataset_quantized_offset.size() = " << dataset_quantized_offset.size() << endl;
+        if (to_id)
+            V2File.seekg(dataset_quantized_offset[to_id]);
+        for (size_t dataset_id = to_id; dataset_id < q_datacount_v2; dataset_id++)
+        {
+            // Feature size
+            size_t feature_count;
+            V2File.read((char*)(&feature_count), sizeof(feature_count));
+            q_count_v2.push_back(feature_count);
+
+            // Feature quantized index and distance to index
+            vector<int> q_sub_idx_v2;
+            vector<float> q_sub_dist_v2;
+            bool show = false;
+            for (size_t feature_idx = 0; feature_idx < feature_count; feature_idx++)
+            {
+                // Index
+                int index_data;
+                V2File.read((char*)(&index_data), sizeof(index_data));
+                q_sub_idx_v2.push_back(index_data);
+                // Dist
+                float dist_data;
+                V2File.read((char*)(&dist_data), sizeof(dist_data));
+                q_sub_dist_v2.push_back(dist_data);
+
+                if (size_t(index_data) > run_param.CLUSTER_SIZE - 1)
+                    show = true;
+                if (show)
+                    cout << "wrong feature_idx:" << feature_idx << " cluster_id:" << index_data << " dist:" << dist_data << " img_id:" << dataset_id << " path:" << ParentPaths[Img2ParentsIdx[dataset_id]] << "/" << ImgLists[dataset_id] << endl;
+            }
+            q_idx_v2.push_back(q_sub_idx_v2);
+            q_dist_v2.push_back(q_sub_dist_v2);
+
+            percentout_timeleft(dataset_id, 0, q_datacount_v2, start_v2, 20);
+        }
+
+        // Close file
+        V2File.close();
+    }
+
+/*
+    // Checking
+    cout << "Dataset size" << endl;
+    cout << q_datacount_v1 << " - " << q_datacount_v2 << endl;
+    cout << "Checking integrity.."; cout.flush();
+    if (q_datacount_v1 == q_datacount_v2 && q_datacount_v1 == q_count_v1.size() && q_datacount_v2 == q_count_v2.size())
+    {
+        for (size_t data_idx = 0; data_idx < q_count_v1.size(); data_idx++)
+        {
+            if (q_count_v1[data_idx] == q_count_v2[data_idx])
+            {
+                for (size_t fea_idx = 0; fea_idx < q_idx_v1[data_idx].size(); fea_idx++)
+                {
+                    if (q_idx_v1[data_idx][fea_idx] != q_idx_v2[data_idx][fea_idx])
+                        cout << data_idx << ":" << fea_idx << " " << q_idx_v1[data_idx][fea_idx] << " - " << q_idx_v2[data_idx][fea_idx] << " not equal" << endl;
+                }
+            }
+            else
+                cout << data_idx << " " << q_count_v1[data_idx] << " - " << q_count_v2[data_idx] << " not equal" << endl;
+
+            percentout(data_idx, q_datacount_v1, 20);
+        }
+    }
+    else
+    {
+        cout << "Data size not equal" << endl;
+    }
+    cout << "done" << endl;
+*/
+}
+
+void BowCorrectnessCheck()
+{
+    vector<size_t> bow_offset_v1;
+    cout << "Loading BOW offset v1..."; cout.flush();
+    if (!bin_read_vector_SIZET(run_param.bow_offset_path + "_v1", bow_offset_v1))
+    {
+        cout << "BOW offset v1 file does not exits, (" << run_param.bow_offset_path << ")" << endl;
+        exit(-1);
+    }
+    cout << "done!" << endl;
+    vector<size_t> bow_offset_v2;
+    cout << "Loading BOW offset v2..."; cout.flush();
+    if (!bin_read_vector_SIZET(run_param.bow_offset_path + "_v2", bow_offset_v2))
+    {
+        cout << "BOW offset v2 file does not exits, (" << run_param.bow_offset_path << ")" << endl;
+        exit(-1);
+    }
+    cout << "done!" << endl;
+
+    ifstream V1File ((run_param.bow_path + "_v1").c_str(), ios::binary);
+    ifstream V2File ((run_param.bow_path + "_v2").c_str(), ios::binary);
+    if (V1File && V2File)
+    {
+        cout << "Checking integrity.."; cout.flush();
+        for (size_t image_id = 0; image_id < bow_offset_v1.size(); image_id++)
+        {
+            vector<bow_bin_object*> bow_sig_v1;
+            // Bow v1
+            {
+                /// Prepare bow buffer
+                size_t curr_offset = bow_offset_v1[image_id];
+                size_t buffer_size = 0;
+                if (image_id < bow_offset_v1.size() - 1)
+                    buffer_size = bow_offset_v1[image_id + 1] - curr_offset;
+                else
+                {
+                    V1File.seekg(0, V1File.end);
+                    buffer_size = V1File.tellg();
+                    buffer_size -= curr_offset;
+                }
+                char* bow_buffer = new char[buffer_size];
+                char* bow_buffer_ptr = bow_buffer;
+                V1File.seekg(curr_offset, V1File.beg);
+                V1File.read(bow_buffer, buffer_size);
+
+                /// Bow hist
+                // Dataset ID (read, but not use)
+                size_t dataset_id_read = *((size_t*)bow_buffer_ptr);
+                bow_buffer_ptr += sizeof(dataset_id_read);
+
+                // Non-zero count
+                size_t bin_count = *((size_t*)bow_buffer_ptr);
+                bow_buffer_ptr += sizeof(bin_count);
+
+                // ClusterID and FeatureIDs
+                int head_size = SIFThesaff::GetSIFTHeadSize();
+                for (size_t bin_idx = 0; bin_idx < bin_count; bin_idx++)
+                {
+                    // Create bin_obj
+                    bow_bin_object* read_bin = new bow_bin_object();
+
+                    // Cluster ID
+                    read_bin->cluster_id = *((size_t*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(read_bin->cluster_id);
+
+                    // Weight
+                    read_bin->weight = *((float*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(read_bin->weight);
+
+                    // Feature count
+                    size_t feature_count;
+                    feature_count = *((size_t*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(feature_count);
+                    for (size_t bow_feature_id = 0; bow_feature_id < feature_count; bow_feature_id++)
+                    {
+                        feature_object* feature = new feature_object();
+
+                        // Feature ID as sequence_id
+                        feature->sequence_id = *((size_t*)bow_buffer_ptr);
+                        bow_buffer_ptr += sizeof(feature->sequence_id);
+                        // x y a b c
+                        feature->kp = new float[head_size];
+                        for (int head_idx = 0; head_idx < head_size; head_idx++)
+                        {
+                            feature->kp[head_idx] = *((float*)bow_buffer_ptr);
+                            bow_buffer_ptr += sizeof(feature->kp[head_idx]);
+                        }
+
+                        read_bin->features.push_back(feature);
+                    }
+
+                    // Keep bow
+                    bow_sig_v1.push_back(read_bin);
+                }
+
+                // Release bow_buffer
+                delete[] bow_buffer;
+            }
+
+            map<size_t, bow_bin_object*> bow_sig_v2_map;
+            vector<bow_bin_object*> bow_sig_v2;
+            // Bow v1
+            {
+                /// Prepare bow buffer
+                size_t curr_offset = bow_offset_v2[image_id];
+                size_t buffer_size = 0;
+                if (image_id < bow_offset_v2.size() - 1)
+                    buffer_size = bow_offset_v2[image_id + 1] - curr_offset;
+                else
+                {
+                    V2File.seekg(0, V2File.end);
+                    buffer_size = V2File.tellg();
+                    buffer_size -= curr_offset;
+                }
+                char* bow_buffer = new char[buffer_size];
+                char* bow_buffer_ptr = bow_buffer;
+                V2File.seekg(curr_offset, V2File.beg);
+                V2File.read(bow_buffer, buffer_size);
+
+                /// Bow hist
+                // Dataset ID (read, but not use)
+                size_t dataset_id_read = *((size_t*)bow_buffer_ptr);
+                bow_buffer_ptr += sizeof(dataset_id_read);
+
+                // Non-zero count
+                size_t bin_count = *((size_t*)bow_buffer_ptr);
+                bow_buffer_ptr += sizeof(bin_count);
+
+                // ClusterID and FeatureIDs
+                int head_size = SIFThesaff::GetSIFTHeadSize();
+                for (size_t bin_idx = 0; bin_idx < bin_count; bin_idx++)
+                {
+                    // Create bin_obj
+                    bow_bin_object* read_bin = new bow_bin_object();
+
+                    // Cluster ID
+                    read_bin->cluster_id = *((size_t*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(read_bin->cluster_id);
+
+                    // Weight
+                    read_bin->weight = *((float*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(read_bin->weight);
+
+                    // Feature count
+                    size_t feature_count;
+                    feature_count = *((size_t*)bow_buffer_ptr);
+                    bow_buffer_ptr += sizeof(feature_count);
+                    for (size_t bow_feature_id = 0; bow_feature_id < feature_count; bow_feature_id++)
+                    {
+                        feature_object* feature = new feature_object();
+
+                        // Feature ID as sequence_id
+                        feature->sequence_id = *((size_t*)bow_buffer_ptr);
+                        bow_buffer_ptr += sizeof(feature->sequence_id);
+                        // x y a b c
+                        feature->kp = new float[head_size];
+                        for (int head_idx = 0; head_idx < head_size; head_idx++)
+                        {
+                            feature->kp[head_idx] = *((float*)bow_buffer_ptr);
+                            bow_buffer_ptr += sizeof(feature->kp[head_idx]);
+                        }
+
+                        read_bin->features.push_back(feature);
+                    }
+
+                    // Keep bow
+                    bow_sig_v2_map[read_bin->cluster_id] = read_bin;
+                }
+
+                for (auto bow_sig_v2_it = bow_sig_v2_map.begin(); bow_sig_v2_it != bow_sig_v2_map.end(); bow_sig_v2_it++)
+                    bow_sig_v2.push_back(bow_sig_v2_it->second);
+                bow_sig_v2_map.clear();
+
+                // Release bow_buffer
+                delete[] bow_buffer;
+            }
+
+            // Checking
+            if (bow_sig_v1.size() == bow_sig_v2.size())
+            {
+                // tf-unitnormalize
+                bow bow_builder;
+                bow_builder.init(run_param);
+                bow_builder.logtf_unitnormalize(bow_sig_v2);
+
+                for (size_t bin_idx = 0; bin_idx < bow_sig_v1.size(); bin_idx++)
+                {
+                    if (bow_sig_v1[bin_idx]->cluster_id == bow_sig_v2[bin_idx]->cluster_id)
+                    {
+                        if (bow_sig_v1[bin_idx]->weight != bow_sig_v2[bin_idx]->weight)
+                            cout << setprecision(20) << fixed << "weight not equal " << bow_sig_v1[bin_idx]->weight << " - " << bow_sig_v2[bin_idx]->weight << endl;
+                    }
+                    else
+                        cout << "bin_cluster not equal, " << bow_sig_v1[bin_idx]->cluster_id << " - " << bow_sig_v2[bin_idx]->cluster_id << endl;
+                }
+            }
+            else
+                cout << "bow_size not equal, " << bow_sig_v1.size() << " - " << bow_sig_v2.size() << endl;
+
+            // Release bow sig v1
+            for (size_t bin_idx = 0; bin_idx < bow_sig_v1.size(); bin_idx++)
+            {
+                for (size_t feature_idx = 0; feature_idx < bow_sig_v1[bin_idx]->features.size(); feature_idx++)
+                {
+                    delete[] bow_sig_v1[bin_idx]->features[feature_idx]->kp;  // delete float* kp[]
+                    delete bow_sig_v1[bin_idx]->features[feature_idx];        // delete feature_object*
+                }
+                bow_sig_v1[bin_idx]->features.clear();
+                delete bow_sig_v1[bin_idx];                                   // delete bow_bin_object*
+            }
+            bow_sig_v1.clear();
+
+            // Release bow sig v2
+            for (size_t bin_idx = 0; bin_idx < bow_sig_v2.size(); bin_idx++)
+            {
+                for (size_t feature_idx = 0; feature_idx < bow_sig_v2[bin_idx]->features.size(); feature_idx++)
+                {
+                    delete[] bow_sig_v2[bin_idx]->features[feature_idx]->kp;  // delete float* kp[]
+                    delete bow_sig_v2[bin_idx]->features[feature_idx];        // delete feature_object*
+                }
+                bow_sig_v2[bin_idx]->features.clear();
+                delete bow_sig_v2[bin_idx];                                   // delete bow_bin_object*
+            }
+            bow_sig_v2.clear();
+
+
+            percentout(image_id, bow_offset_v1.size(), 20);
+        }
+        cout << "done!" << endl;
+
+        // Close file
+        V1File.close();
+        V2File.close();
+    }
+    else
+        cout << "Bow path incorrect! : " << run_param.bow_path << endl;
+}
+
+void InvDefCorrectnessCheck()
+{
+    cout << "Read inverted header v1.."; cout.flush();
+    // Load existing header V1
+    size_t total_df_v1 = 0;
+    size_t data_size_v1 = 0;
+    size_t* actual_cluster_amount_v1 = new size_t[run_param.CLUSTER_SIZE];
+    float* idf_v1 = new float[run_param.CLUSTER_SIZE];
+    ifstream V1File ((run_param.inv_data_path + "_v1").c_str(), ios::binary);
+    if (V1File)
+    {
+        // Load data_size_v1
+        V1File.read((char*)(&data_size_v1), sizeof(data_size_v1));
+
+        // Load cluster_amount
+        for(size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+        {
+            // Read cluster_amount
+            size_t read_cluster_amount;
+            V1File.read((char*)(&read_cluster_amount), sizeof(read_cluster_amount));
+            total_df_v1 += actual_cluster_amount_v1[cluster_id] = read_cluster_amount;
+        }
+
+        // Load idf
+        for (size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+        {
+            // Read idf
+            float read_idf;
+            V1File.read((char*)(&read_idf), sizeof(read_idf));
+            idf_v1[cluster_id] = read_idf;
+        }
+
+        // Close file
+        V1File.close();
+    }
+    cout << "done!" << endl;
+
+
+    cout << "Read inverted header v2.."; cout.flush();
+    // Load existing header V2
+    size_t total_df_v2 = 0;
+    size_t data_size_v2 = 0;
+    size_t* actual_cluster_amount_v2 = new size_t[run_param.CLUSTER_SIZE];
+    float* idf_v2 = new float[run_param.CLUSTER_SIZE];
+    ifstream V2File ((run_param.inv_data_path + "_v2").c_str(), ios::binary);
+    if (V2File)
+    {
+        // Load total_df
+        V2File.read((char*)(&total_df_v2), sizeof(total_df_v2));
+
+        // Load data_size_v2
+        V2File.read((char*)(&data_size_v2), sizeof(data_size_v2));
+
+        // Load cluster_amount
+        for(size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            V2File.read((char*)(&actual_cluster_amount_v2[cluster_id]), sizeof(actual_cluster_amount_v2[cluster_id]));
+
+        // Load idf
+        for (size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            V2File.read((char*)(&idf_v2[cluster_id]), sizeof(idf_v2[cluster_id]));
+
+        /*
+        // Load written_word
+        for (size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            V2File.read((char*)(&written_word[cluster_id]), sizeof(written_word[cluster_id]));
+        */
+
+        // Close file
+        V2File.close();
+    }
+    cout << "done!" << endl;
+
+    cout << "Checking integrity.."; cout.flush();
+    if (total_df_v1 == total_df_v2)
+    {
+        // Check data size
+        if (data_size_v1 == data_size_v2)
+        {
+            for (size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            {
+                // Check cluster_amount
+                if (actual_cluster_amount_v1[cluster_id] == actual_cluster_amount_v2[cluster_id])
+                {
+
+                }
+                else
+                    cout << "cluster_amount not equal " << actual_cluster_amount_v1[cluster_id] << " - " << actual_cluster_amount_v2[cluster_id] << endl;
+
+                // Check idf
+                if (idf_v1[cluster_id] == idf_v2[cluster_id])
+                {
+
+                }
+                else
+                    cout << setprecision(6) << fixed << "idf not equal " << idf_v1[cluster_id] << " - " << idf_v2[cluster_id] << endl;
+            }
+        }
+        else
+            cout << "data_size not equal " << data_size_v1 << " - " << data_size_v2 << endl;
+    }
+    else
+        cout << "total_df not equal " << total_df_v1 << " - " << total_df_v2 << endl;
+    cout << "done!" << endl;
+
+    // Release memory
+    delete[] actual_cluster_amount_v1;
+    delete[] idf_v1;
+    delete[] actual_cluster_amount_v2;
+    delete[] idf_v2;
+}
+
+void PoolingTester()
+{
+    bow bow_tester;
+    bow_tester.init(run_param);
+
+    float* k1 = new float[5];
+    float* k2 = new float[5];
+    float* k3 = new float[5];
+    float* k4 = new float[5];
+    float* k5 = new float[5];
+    float* k6 = new float[5];
+    float* k7 = new float[5];
+    float* k8 = new float[5];
+    float* k9 = new float[5];
+    int* index1 = new int[6];
+    vector<float*> kp1;
+    index1[0] = 10;
+    index1[1] = 10;
+    index1[2] = 10;
+    index1[3] = 10;
+    index1[4] = 55;
+    index1[5] = 55;
+    kp1.push_back(k1);
+    kp1.push_back(k2);
+    kp1.push_back(k3);
+    kp1.push_back(k4);
+    kp1.push_back(k5);
+    kp1.push_back(k6);
+    int* index2 = new int[3];
+    vector<float*> kp2;
+    index2[0] = 10;
+    index2[1] = 55;
+    index2[2] = 70;
+    kp2.push_back(k7);
+    kp2.push_back(k8);
+    kp2.push_back(k9);
+
+    bow_tester.build_bow(index1, kp1, 0);
+    bow_tester.build_bow(index2, kp2, 0);
+
+    vector<bow_bin_object*> bow_sig1 = bow_tester.get_bow_at(0);
+    vector<bow_bin_object*> bow_sig2 = bow_tester.get_bow_at(1);
+
+    bow_tester.build_pool(run_param.pooling_mode);
+
+    vector<bow_bin_object*> bow_sig_pool = bow_tester.get_bow_pool_at(0);
+
+    cout << "---- bow_sig1 ---- ";
+    cout << "size():" << bow_sig1.size() << endl;
+    for (size_t bin_id = 0; bin_id < bow_sig1.size(); bin_id++)
+    {
+        cout << "bin id:" << bin_id << "\t";
+        cout << "cluster_id:" << bow_sig1[bin_id]->cluster_id << "\t";
+        cout << "weight:" << bow_sig1[bin_id]->weight << "\t";
+        cout << "features.size():" << bow_sig1[bin_id]->features.size() << endl;
+    }
+    cout << endl;
+
+    cout << "---- bow_sig2 ---- ";
+    cout << "size():" << bow_sig2.size() << endl;
+    for (size_t bin_id = 0; bin_id < bow_sig2.size(); bin_id++)
+    {
+        cout << "bin id:" << bin_id << "\t";
+        cout << "cluster_id:" << bow_sig2[bin_id]->cluster_id << "\t";
+        cout << "weight:" << bow_sig2[bin_id]->weight << "\t";
+        cout << "features.size():" << bow_sig2[bin_id]->features.size() << endl;
+    }
+    cout << endl;
+
+    cout << "---- bow_sig_pool ---- ";
+    cout << "size():" << bow_sig_pool.size() << endl;
+    for (size_t bin_id = 0; bin_id < bow_sig_pool.size(); bin_id++)
+    {
+        cout << "bin id:" << bin_id << "\t";
+        cout << "cluster_id:" << bow_sig_pool[bin_id]->cluster_id << "\t";
+        cout << "weight:" << bow_sig_pool[bin_id]->weight << "\t";
+        cout << "features.size():" << bow_sig_pool[bin_id]->features.size() << endl;
+    }
+    cout << endl;
+
+    cout << "Inverted df check" << endl;
+    ifstream iv_header_File (run_param.inv_header_path.c_str(), ios::binary);
+    if (iv_header_File)
+    {
+        // Load total_df
+        size_t total_df;
+        iv_header_File.read((char*)(&total_df), sizeof(total_df));
+
+        // Load dataset_size
+        size_t dataset_size;
+        iv_header_File.read((char*)(&dataset_size), sizeof(dataset_size));
+
+        // Load cluster_amount
+        size_t* actual_cluster_amount = new size_t[run_param.CLUSTER_SIZE];
+        size_t tmp_read;
+        for(size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+        {
+            iv_header_File.read((char*)(&tmp_read), sizeof(tmp_read));
+            actual_cluster_amount[cluster_id] = tmp_read;
+        }
+
+        vector< pair<size_t, size_t> > cluster_amount_sorted;
+        for(size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            cluster_amount_sorted.push_back(pair<size_t, size_t>(cluster_id, actual_cluster_amount[cluster_id]));
+        sort(cluster_amount_sorted.begin(), cluster_amount_sorted.end(), compare_pair_second<>());
+
+        cout << "df histogram:" << endl;
+        stringstream hist_string;
+        for(size_t cluster_id = 0; cluster_id < run_param.CLUSTER_SIZE; cluster_id++)
+            hist_string << cluster_amount_sorted[cluster_id].second << endl;
+        text_write(run_param.offline_working_path + "/df.csv", hist_string.str());
+    }
+}
+
+void ExportImgList()
+{
+    stringstream out_imglist;
+    for (size_t img_idx = 0; img_idx < ImgLists.size(); img_idx++)
+    {
+        stringstream dataset_path;
+        dataset_path << ParentPaths[Img2ParentsIdx[img_idx]] << "/" << ImgLists[img_idx];
+        out_imglist << dataset_path.str() << endl;
+        percentout(img_idx, ImgLists.size(), 1);
+    }
+
+    text_write(run_param.offline_working_path + "/imglist.txt", out_imglist.str());
 }
 //;)
