@@ -71,10 +71,20 @@ int main(int argc,char *argv[])
             cout << "[k] Preprocess dataset" << endl;
             cout << "[e] Extracting feature (with save)" << endl;
             cout << "[p] Packing extracted features" << endl;
+            cout << "[j] Sampling feature on-the-fly" << endl;
             cout << "[c] Clustering feature" << endl;
+            cout << "[u] Clustering coarse layer" << endl;
             cout << "[v] Vector quantization" << endl;
             cout << "[b] Bag of word building" << endl;
             cout << "[i] Building invert index and save" << endl;
+            cout << "[s] SIFT feature corrupt check" << endl;
+            cout << "[r] SIFT Pack repair" << endl;
+            cout << "[w] Pool checking" << endl;
+            cout << "[x] Quantize upgrade check" << endl;
+            cout << "[y] Bow upgrade check" << endl;
+            cout << "[z] Inverted index definition check" << endl;
+            cout << "[o] Bow Pooling Tester" << endl;
+            cout << "[t] Image list exporter" << endl;
             cout << "Enter menu: ";
             cin >> menu;
 
@@ -99,18 +109,18 @@ int main(int argc,char *argv[])
                 ExtractDataset(save_feature);
                 break;
             case 'p':
-                cout << "Do you want to pack features block-by-block? [y|n] : "; cout.flush();
-                cin >> pack_opt;
-                if (pack_opt == 'y')
-                {
-                    by_block = true;
-                    cout << "Block size (number of images) : "; cout.flush();
-                    cin >> block_size;
-                }
-                PackFeature(by_block, block_size);
+                cout << "Please specify total images per block (as buffer) : "; cout.flush();
+                cin >> block_size;
+                PackFeature(block_size);
+                break;
+            case 'j':
+                SamplingOnTheFly();
                 break;
             case 'c':
                 Clustering(save_cluster);
+                break;
+            case 'u':
+                ClusteringCoarseLayer();
                 break;
             case 'v':
                 ImageFeaturesQuantization(save_quantized);
@@ -120,6 +130,30 @@ int main(int argc,char *argv[])
                 break;
             case 'i':
                 build_invert_index();
+                break;
+            case 's':
+                SiftCheck();
+                break;
+            case 'r':
+                SiftPackRepair();
+                break;
+            case 'w':
+                PoolCheck();
+                break;
+            case 'x':
+                QuantizedCorrectnessCheck();
+                break;
+            case 'y':
+                BowCorrectnessCheck();
+                break;
+            case 'z':
+                InvDefCorrectnessCheck();
+                break;
+            case 'o':
+                PoolingTester();
+                break;
+            case 't':
+                ExportImgList();
                 break;
             }
 
