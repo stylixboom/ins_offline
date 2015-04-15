@@ -1477,6 +1477,74 @@ void SaveCluster(const string& out)
     HDF_write_2DFLOAT(out, "clusters", cluster.ptr(), cluster_amount, cluster_dimension);*/
 }
 
+void ClusteringCoarseLayer()
+{
+    cout << "Please specify original cluster full-path:"; cout.flush();
+    string source_cluster_path;
+    cin >> source_cluster_path;
+
+    /// Load source cluster
+    cout << "Load source cluster.."; cout.flush();
+        size_t source_cluster_amount;      // Cluster size
+        size_t source_cluster_dimension;   // Feature dimension
+
+        // Get HDF5 header
+        HDF_get_2Ddimension(source_cluster_path, "clusters", source_cluster_amount, source_cluster_dimension);
+        cout << "[" << source_cluster_dimension << ", " << source_cluster_amount << "].."; cout.flush();
+
+        // Wrap data to matrix for flann knn searching
+        float* load_cluster;   // will be replaced by read HDF5
+
+        // Read from HDF5
+        HDF_read_2DFLOAT(source_cluster_path, "clusters", load_cluster, source_cluster_amount, source_cluster_dimension);
+        Matrix<float> source_cluster(load_cluster, source_cluster_amount, source_cluster_dimension);
+    cout << "done!" << endl;
+
+    /// Load current running cluster
+    cout << "Load coarse layer cluster.."; cout.flush();
+        Matrix<int> source_result_index;
+        Matrix<float> source_result_dist;
+        quantizer ann;
+        ann.init(run_param);
+    cout << "done!" << endl;
+
+    /// Quantization
+    cout << "Searching coarse assignment.."; cout.flush();
+        ann.quantize(source_cluster, source_cluster_amount, source_result_index, source_result_dist);
+    cout << "done!" << endl;
+
+    /// Saving
+    cout << "Saving map.."; cout.flush();
+        int* source_result_index_ptr = source_result_index.ptr();
+        float* source_result_dist_ptr = source_result_dist.ptr();
+        fstream OutFile((run_param.offline_working_path + "/coarse_cluster_lut_" + toString(source_cluster_amount) + "-" + toString(run_param.CLUSTER_SIZE)).c_str(), ios::binary | ios::out);
+        if (OutFile.is_open())
+        {
+            // Source cluster count
+            OutFile.write(reinterpret_cast<char*>(&source_cluster_amount), sizeof(source_cluster_amount));
+
+            // Quantize index and distance
+            for (size_t lut_idx = 0; lut_idx < source_cluster_amount; lut_idx++)
+            {
+                // Index
+                int quantized_index = source_result_index_ptr[lut_idx];
+                OutFile.write(reinterpret_cast<char*>(&quantized_index), sizeof(quantized_index));
+                // Dist
+                float quantized_dist = source_result_dist_ptr[lut_idx];
+                OutFile.write(reinterpret_cast<char*>(&quantized_dist), sizeof(quantized_dist));
+            }
+
+            // Close file
+            OutFile.close();
+        }
+    cout << "done!" << endl;
+
+    // Release memory
+    delete[] source_cluster.ptr();
+    delete[] source_result_index.ptr();
+    delete[] source_result_dist.ptr();
+}
+
 void ImageFeaturesQuantization(bool save_quantized)
 {
     // Check existing poolinfo
