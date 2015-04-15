@@ -1330,7 +1330,6 @@ void Clustering(bool save_cluster, bool hdf5)
 
         // Cluster preparation
         int km_cluster_size = run_param.CLUSTER_SIZE;
-        int dimension = SIFThesaff::GetSIFTD();
         int km_iteration = 50;
 
         if (hdf5) // MPI-AKM clustering
@@ -1344,11 +1343,9 @@ void Clustering(bool save_cluster, bool hdf5)
             cin >> opt;
             if (opt != 'n')
             {
-                string sampling;
-                cout << "Recommend 35% of images = " << feature_count_per_image.size() / 35 << " , 35% of features = " << total_features / 35 << endl;
+                cout << "Recommend 35% of images = " << feature_count_per_image.size() * 35 / 100 << " , 35% of features = " << total_features *  35 / 100 << endl;
                 cout << "Your preference: "; cout.flush();
-                cin >> sampling;
-                sample_size = atoi(sampling.c_str());
+                cin >> sample_size;
 
                 // Convert feature to image based sampling
                 if (opt == 'f')
@@ -1358,7 +1355,7 @@ void Clustering(bool save_cluster, bool hdf5)
                     cout << "approx. ~" << sample_size << " images" << endl;
                 }
 
-                run_param.feature_descriptor_path = SamplingDatabase(sample_size, dimension);
+                run_param.feature_descriptor_path = SamplingDatabase(sample_size);
             }
 
 
@@ -1367,10 +1364,13 @@ void Clustering(bool save_cluster, bool hdf5)
             #!/usr/bin/env python
             import time;
             import fastcluster;
+			import ctypes;
+			libfastcluster = ctypes.CDLL('libfastcluster.so');
             tic = time.time();
             fastcluster.kmeans("./cluster", "./feature_descriptor", km_cluster_size, km_iteration);
             toc = time.time();
             print "fastcluster.kmeans(dataset_header, km_cluster_size centers, km_iteration iterations) time: %.0f" %(toc-tic);
+			libfastcluster.finalize();
             */
             ofstream PyFile (vgg_fastcluster_path.c_str());
             if (PyFile.is_open())
@@ -1379,10 +1379,13 @@ void Clustering(bool save_cluster, bool hdf5)
                 PyFile << "#!/usr/bin/env python" << endl;
                 PyFile << "import time;" << endl;
                 PyFile << "import fastcluster;" << endl;
+                PyFile << "import ctypes;" << endl;
+                PyFile << "libfastcluster = ctypes.CDLL('libfastcluster.so');" << endl;
                 PyFile << "tic = time.time();" << endl;
                 PyFile << "fastcluster.kmeans(\"" << run_param.cluster_path << "\", \"" << run_param.feature_descriptor_path << "\", " << km_cluster_size << ", " << km_iteration << ");" << endl;
                 PyFile << "toc = time.time();" << endl;
                 PyFile << "print \"fastcluster.kmeans(" << run_param.dataset_header << ", " << km_cluster_size << " centers, " << km_iteration << " iterations) time: %.0f\" %(toc-tic);" << endl;
+                PyFile << "libfastcluster.finalize();" << endl;
 
                 // Close file
                 PyFile.close();
