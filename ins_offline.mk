@@ -13,8 +13,8 @@ CurrentFileName        :=
 CurrentFilePath        :=
 CurrentFileFullPath    :=
 User                   :=Siriwat Kasamwattanarote
-Date                   :=29/09/15
-CodeLitePath           :="/home/stylix/.codelite"
+Date                   :=02/10/15
+CodeLitePath           :="/home/stylix/Dropbox/MyDocument/SokendaiCourse/Researches/Workspace/configurations/.codelite"
 LinkerName             :=g++
 SharedObjectLinkerName :=g++ -shared -fPIC
 ObjectSuffix           :=.o
@@ -39,9 +39,9 @@ LinkOptions            :=  `pkg-config opencv --libs` `pkg-config --libs lapacke
 IncludePath            :=  $(IncludeSwitch). $(IncludeSwitch)/home/stylix/local/include 
 IncludePCH             := 
 RcIncludePath          := 
-Libs                   := $(LibrarySwitch)ins $(LibrarySwitch)alphautils $(LibrarySwitch)sifthesaff $(LibrarySwitch)opencv_core $(LibrarySwitch)opencv_features2d $(LibrarySwitch)opencv_highgui $(LibrarySwitch)x264 $(LibrarySwitch)faac $(LibrarySwitch)lapacke $(LibrarySwitch)lapack $(LibrarySwitch)blas $(LibrarySwitch)tmglib $(LibrarySwitch)hdf5 $(LibrarySwitch)hdf5_hl_cpp $(LibrarySwitch)hdf5_cpp $(LibrarySwitch)hdf5_hl $(LibrarySwitch)mpi_cxx $(LibrarySwitch)mpi $(LibrarySwitch)rt $(LibrarySwitch)gomp $(LibrarySwitch)pthread $(LibrarySwitch)dl 
-ArLibs                 :=  "libins.a" "libalphautils.a" "libsifthesaff.a" "opencv_core" "opencv_features2d" "opencv_highgui" "x264" "faac" "lapacke" "lapack" "blas" "tmglib" "hdf5" "hdf5_hl_cpp" "hdf5_cpp" "hdf5_hl" "mpi_cxx" "mpi" "rt" "gomp" "pthread" "dl" 
-LibPath                := $(LibraryPathSwitch). $(LibraryPathSwitch)/home/stylix/local/lib $(LibraryPathSwitch)../lib/ins $(LibraryPathSwitch)../lib/sifthesaff $(LibraryPathSwitch)../lib/alphautils 
+Libs                   := $(LibrarySwitch)ins $(LibrarySwitch)sifthesaff $(LibrarySwitch)alphautils $(LibrarySwitch)opencv_core $(LibrarySwitch)opencv_features2d $(LibrarySwitch)opencv_highgui $(LibrarySwitch)x264 $(LibrarySwitch)faac $(LibrarySwitch)lapacke $(LibrarySwitch)lapack $(LibrarySwitch)blas $(LibrarySwitch)tmglib $(LibrarySwitch)hdf5 $(LibrarySwitch)hdf5_hl_cpp $(LibrarySwitch)hdf5_cpp $(LibrarySwitch)hdf5_hl $(LibrarySwitch)mpi_cxx $(LibrarySwitch)mpi $(LibrarySwitch)rt $(LibrarySwitch)gomp $(LibrarySwitch)pthread $(LibrarySwitch)dl 
+ArLibs                 :=  "libins.a" "libsifthesaff.a" "libalphautils.a" "opencv_core" "opencv_features2d" "opencv_highgui" "x264" "faac" "lapacke" "lapack" "blas" "tmglib" "hdf5" "hdf5_hl_cpp" "hdf5_cpp" "hdf5_hl" "mpi_cxx" "mpi" "rt" "gomp" "pthread" "dl" 
+LibPath                := $(LibraryPathSwitch). $(LibraryPathSwitch)/home/stylix/local/lib $(LibraryPathSwitch)../lib/ins/$(ConfigurationName) $(LibraryPathSwitch)../lib/sifthesaff/$(ConfigurationName) $(LibraryPathSwitch)../lib/alphautils/$(ConfigurationName) 
 
 ##
 ## Common variables
