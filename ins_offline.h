@@ -33,8 +33,7 @@ void LoadDataset(const string& ImgPath);
 void SaveDatasetList();
 void LoadDatasetList();
 void ProcessDataset();                      // Not necessary, this is for pre-processing image
-void ExtractDataset(bool save_feature);
-void PackFeature(size_t block_size);
+void ExtractFeature(size_t block_size);
 const int LOAD_DESC = 0, LOAD_KP = 1, LOAD_ALL = 2;
 void LoadFeature(size_t start_idx, size_t load_size, int load_mode, Matrix<float>& load_data);
 void SavePoolinfo(const string& out, const bool print = true);

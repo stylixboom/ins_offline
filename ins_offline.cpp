@@ -24,6 +24,7 @@
 // Siriwat's header
 #include "../lib/alphautils/alphautils.h"
 #include "../lib/alphautils/hdf5_io.h"
+#include "../lib/orb/orb.h"
 #include "../lib/sifthesaff/SIFThesaff.h"
 #include "../lib/ins/ins_param.h"
 #include "../lib/ins/invert_index.h"
@@ -69,8 +70,7 @@ int main(int argc,char *argv[])
             cout << "======== Instance Search - Offline (" << ins_offline_AutoVersion::ins_offline_FULLVERSION_STRING << ") ========" << endl;
             cout << "[l] Load dataset" << endl;
             cout << "[k] Preprocess dataset" << endl;
-            cout << "[e] Extracting feature (with save)" << endl;
-            cout << "[p] Packing extracted features" << endl;
+            cout << "[e] Extracting and packing features to HDF5" << endl;
             cout << "[j] Sampling feature on-the-fly" << endl;
             cout << "[c] Clustering feature" << endl;
             cout << "[u] Clustering coarse layer" << endl;
@@ -88,7 +88,6 @@ int main(int argc,char *argv[])
             cout << "Enter menu: ";
             cin >> menu;
 
-            bool save_feature = true;
             bool save_cluster = true;
             bool save_quantized = true;
             bool save_bow = true;
@@ -103,13 +102,9 @@ int main(int argc,char *argv[])
                 ProcessDataset();
                 break;
             case 'e':
-                //char save_feature_choice = 'n';
-                ExtractDataset(save_feature);
-                break;
-            case 'p':
                 cout << "Please specify total images per block (as buffer) : "; cout.flush();
                 cin >> block_size;
-                PackFeature(block_size);
+                ExtractFeature(block_size);
                 break;
             case 'j':
                 SamplingOnTheFly();
@@ -536,119 +531,7 @@ void ProcessDataset()
     cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
 }
 
-void ExtractDataset(bool save_feature)
-{
-    // Checking image avalibality
-    if (ImgLists.size() == 0)
-    {
-        cout << "No image available" << endl;
-        return;
-    }
-
-    /*// Parallel feature extraction
-    // use with really good i/o, for network disk is not good enough
-    int total_machine = 1;
-    int machine_no = 0;
-    char empty_char;
-    cout << "Tell me total running machine and machine number eg. 't4m0s' or not specify 'n' :) ? - "; cout.flush();
-    cin >> empty_char;          // t
-    if (empty_char != 'n')
-    {
-        cin >> total_machine;   // 4
-        cin >> empty_char;      // m
-        cin >> machine_no;      // 0
-        cin >> empty_char;      // s
-    }
-    */
-
-    // Skip until file
-    cout << "Do you want to skip file until [n|filename]: "; cout.flush();
-    string skip_to_file;
-    cin >> skip_to_file;
-    size_t resume_id = 0;
-    if (skip_to_file != "n")
-    {
-        for (resume_id = 0; resume_id < ImgLists.size(); resume_id++)
-        {
-            if (ImgLists[resume_id] == skip_to_file)
-                break;
-        }
-        // To start at the next file
-        resume_id++;
-    }
-
-    /*// use with really good i/o, for network disk is not good enough
-    resume_id += machine_no;*/
-
-    // ======== Extracting dataset feature ========
-    cout << "Extracting dataset..";
-    cout.flush();
-    startTime = CurrentPreciseTime();
-
-    SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift); // color, normalize, rootsift
-
-    //bool toggle_skip = false;
-    //bool start_ls2null = false;
-    //for (size_t img_idx = resume_id; img_idx < ImgLists.size(); img_idx += total_machine) // for network disk is not good enough
-    for (size_t img_idx = resume_id; img_idx < ImgLists.size(); img_idx++)
-    {
-        /*int skip_to_rand = 0;
-        int max_skip = 32;
-        if (max_skip > (int)(ImgLists.size() - img_idx))
-            max_skip = (int)(ImgLists.size() - img_idx);
-        if (toggle_skip)
-            skip_to_rand = rand() % max_skip + img_idx;
-        toggle_skip = !toggle_skip;*/
-
-        stringstream curr_img_parent;
-        stringstream curr_img_path;
-        stringstream curr_img_export_parent;
-        stringstream curr_img_export_path;
-        curr_img_parent << run_param.dataset_root_dir << "/" << ParentPaths[Img2ParentsIdx[img_idx]];
-        curr_img_path << curr_img_parent.str() << "/" << ImgLists[img_idx];
-        curr_img_export_parent << run_param.dataset_feature_root_dir << "/" << run_param.feature_name << "/" << ParentPaths[Img2ParentsIdx[img_idx]];
-        curr_img_export_path << curr_img_export_parent.str() << "/" << ImgLists[img_idx] << ".sifthesaff";
-
-
-        /// Parallel feature extraction can be done here
-
-        // Check existing, no extracting if exist
-        //if (start_ls2null)
-            //ls2null(curr_img_export_path.str());
-        if (!islock(curr_img_export_path.str()) && !is_path_exist(curr_img_export_path.str()))
-        {
-            //start_ls2null = true;
-
-            /// Lock file
-            lockfile(curr_img_export_path.str());
-
-            /// Extracting feature
-            //cout << "curr_img_path" << curr_img_path.str() << endl;
-            sifthesaff_dataset.extractPerdochSIFT(curr_img_path.str());
-
-            /// Save extracted features
-            //cout << "curr_img_export_path: " << curr_img_export_path.str() << endl;
-            if (save_feature)
-                sifthesaff_dataset.exportKeypoints(curr_img_export_path.str(), true);
-
-            /// Unlock file
-            unlockfile(curr_img_export_path.str());
-
-
-            /*if (skip_to_rand > 0)
-                img_idx -= 1;*/
-        }
-
-        //percentout(img_idx, ImgLists.size(), 1);
-        percentout_timeleft(img_idx, resume_id, ImgLists.size(), startTime, 1);
-
-        // Sampling
-        //img_idx += 5;
-    }
-    cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
-}
-
-void PackFeature(size_t block_size)
+void ExtractFeature(size_t block_size)
 {
     /// Load each image features
     // Checking image avalibality
@@ -680,8 +563,20 @@ void PackFeature(size_t block_size)
         bool did_write = false;
 
         // Sift header
-        int sift_head_len = SIFThesaff::GetSIFTHeadSize();  // keypoint dimension
-        int sift_dim = SIFThesaff::GetSIFTD();              // dataset dimension
+        int head_len = 0;
+		int dim = 0;
+		// SIFThesaff
+		if (run_param.feature_type == FEAT_SIFTHESAFF)
+		{
+			head_len = SIFThesaff::GetSIFTHeadSize();	// keypoint dimension
+			dim = SIFThesaff::GetSIFTD();				// dataset dimension
+		}
+		// ORB
+		else
+		{
+			head_len = orb::GetORBHeadSize();			// keypoint dimension
+			dim = orb::GetORBD();						// dataset dimension
+		}
 
         // Resuming
         size_t resume_id = 0;
@@ -789,40 +684,76 @@ void PackFeature(size_t block_size)
                     for (size_t block_idx = 0; block_idx < available_block; block_idx++)
                     {
                         size_t curr_img_idx = img_idx + block_idx;
-                        //string curr_img_feature_path = run_param.dataset_feature_root_dir + "/" + run_param.feature_name + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx] + ".sifthesaff";
                         string curr_img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx];
 
-                        SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
-                        //sifthesaff_dataset.importKeypoints(curr_img_feature_path);
-                        sifthesaff_dataset.extractPerdochSIFT(curr_img_path);
+						// SIFThesaff
+						if (run_param.feature_type == FEAT_SIFTHESAFF)
+						{
+							SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);                        
+							sifthesaff_dataset.extractPerdochSIFT(curr_img_path);
 
-                        /// Packing feature
-                        int num_kp = sifthesaff_dataset.num_kp;
-                        block_feature_count += num_kp;
+							/// Packing feature
+							int num_kp = sifthesaff_dataset.num_kp;
+							block_feature_count += num_kp;
 
-                        /// Building Poolinfo
-                        #pragma omp atomic
-                        feature_count_per_pool[Img2PoolIdx[curr_img_idx]] += num_kp; // Accumulating feature count in the pool
-                        feature_count_per_image[curr_img_idx] = num_kp;              // Keep feature for each image
-                        #pragma omp atomic
-                        image_count_per_pool[Img2PoolIdx[curr_img_idx]]++;           // Accumulating total image per pool
+							/// Building Poolinfo
+							#pragma omp atomic
+							feature_count_per_pool[Img2PoolIdx[curr_img_idx]] += num_kp; // Accumulating feature count in the pool
+							feature_count_per_image[curr_img_idx] = num_kp;              // Keep feature for each image
+							#pragma omp atomic
+							image_count_per_pool[Img2PoolIdx[curr_img_idx]]++;           // Accumulating total image per pool
 
 
-                        float* kp_dat = new float[num_kp * sift_head_len];      // keypoint data
-                        float* desc_dat = new float[num_kp * sift_dim];         // descriptor data
-                        for(int row = 0; row < num_kp; row++)
-                        {
-                            //== keypoint
-                            for(int col = 0; col < sift_head_len; col++)
-                                kp_dat[row * sift_head_len + col] = sifthesaff_dataset.kp[row][col];
+							float* kp_dat = new float[num_kp * head_len];      // keypoint data
+							float* desc_dat = new float[num_kp * dim];         // descriptor data
+							for(int row = 0; row < num_kp; row++)
+							{
+								//== keypoint
+								for(int col = 0; col < head_len; col++)
+									kp_dat[row * head_len + col] = sifthesaff_dataset.kp[row][col];
 
-                            //== descriptor
-                            for(int col = 0; col < sift_dim; col++)
-                                desc_dat[row * sift_dim + col] = sifthesaff_dataset.desc[row][col];
-                        }
-                        kp_buffer[block_idx] = kp_dat;
-                        desc_buffer[block_idx] = desc_dat;
-                        numkp_buffer[block_idx] = num_kp;
+								//== descriptor
+								for(int col = 0; col < dim; col++)
+									desc_dat[row * dim + col] = sifthesaff_dataset.desc[row][col];
+							}
+							kp_buffer[block_idx] = kp_dat;
+							desc_buffer[block_idx] = desc_dat;
+							numkp_buffer[block_idx] = num_kp;
+						}
+						// ORB
+						else
+						{
+							orb orb_dataset(run_param.colorspace, run_param.normpoint, false);                        
+							orb_dataset.extract(curr_img_path);
+
+							/// Packing feature
+							int num_kp = orb_dataset.num_kp;
+							block_feature_count += num_kp;
+
+							/// Building Poolinfo
+							#pragma omp atomic
+							feature_count_per_pool[Img2PoolIdx[curr_img_idx]] += num_kp; // Accumulating feature count in the pool
+							feature_count_per_image[curr_img_idx] = num_kp;              // Keep feature for each image
+							#pragma omp atomic
+							image_count_per_pool[Img2PoolIdx[curr_img_idx]]++;           // Accumulating total image per pool
+
+
+							float* kp_dat = new float[num_kp * head_len];      // keypoint data
+							float* desc_dat = new float[num_kp * dim];         // descriptor data
+							for(int row = 0; row < num_kp; row++)
+							{
+								//== keypoint
+								for(int col = 0; col < head_len; col++)
+									kp_dat[row * head_len + col] = orb_dataset.kp[row][col];
+
+								//== descriptor
+								for(int col = 0; col < dim; col++)
+									desc_dat[row * dim + col] = orb_dataset.desc[row][col];
+							}
+							kp_buffer[block_idx] = kp_dat;
+							desc_buffer[block_idx] = desc_dat;
+							numkp_buffer[block_idx] = num_kp;
+						}
                     }
                 }
 
@@ -834,21 +765,21 @@ void PackFeature(size_t block_size)
 
                     text_write(log_file, " total_features:" + toString(total_features) + " block_feature_count:" + toString(block_feature_count), true);
 
-                    float* block_kp = new float[block_feature_count * sift_head_len];
-                    float* block_desc = new float[block_feature_count * sift_dim];
+                    float* block_kp = new float[block_feature_count * head_len];
+                    float* block_desc = new float[block_feature_count * dim];
                     // Packing all features into one before writing to HDF5
                     size_t kp_offset = 0;
                     size_t desc_offset = 0;
                     for(size_t block_id = 0; block_id < available_block; block_id++)
                     {
                         // Packing kp
-                        size_t kp_size = sift_head_len * numkp_buffer[block_id];
+                        size_t kp_size = head_len * numkp_buffer[block_id];
                         for(size_t col = 0; col < kp_size; col++)
                             block_kp[kp_offset + col] = kp_buffer[block_id][col];
                         kp_offset += kp_size;
 
                         // Pack desc
-                        size_t desc_size = sift_dim * numkp_buffer[block_id];
+                        size_t desc_size = dim * numkp_buffer[block_id];
                         for(size_t col = 0; col < desc_size; col++)
                             block_desc[desc_offset + col] = desc_buffer[block_id][col];
                         desc_offset += desc_size;
@@ -857,18 +788,18 @@ void PackFeature(size_t block_size)
                     if (repair_last_block)
                     {
                         text_write(log_file, " repair kp..", true);
-                        HDF_update_row_2DFLOAT(run_param.feature_keypoint_path, "keypoint", block_kp, completed_feature_count, block_feature_count, sift_head_len);
+                        HDF_update_row_2DFLOAT(run_param.feature_keypoint_path, "keypoint", block_kp, completed_feature_count, block_feature_count, head_len);
                         text_write(log_file, "ok desc..", true);
-                        HDF_update_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", block_desc, completed_feature_count, block_feature_count, sift_dim);
+                        HDF_update_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", block_desc, completed_feature_count, block_feature_count, dim);
                         text_write(log_file, "ok", true);
                         repair_last_block = false;
                     }
                     else
                     {
                         text_write(log_file, " kp..", true);
-                        HDF_write_append_2DFLOAT(run_param.feature_keypoint_path, did_write, "keypoint", block_kp, block_feature_count, sift_head_len);
+                        HDF_write_append_2DFLOAT(run_param.feature_keypoint_path, did_write, "keypoint", block_kp, block_feature_count, head_len);
                         text_write(log_file, "ok desc..", true);
-                        HDF_write_append_2DFLOAT(run_param.feature_descriptor_path, did_write, "descriptor", block_desc, block_feature_count, sift_dim);
+                        HDF_write_append_2DFLOAT(run_param.feature_descriptor_path, did_write, "descriptor", block_desc, block_feature_count, dim);
                         text_write(log_file, "ok", true);
                     }
 
@@ -935,8 +866,20 @@ void PackFeature(size_t block_size)
 void LoadFeature(size_t start_idx, size_t load_size, int load_mode, Matrix<float>& load_data)
 {
     // Feature Header
-    int sift_head_len = SIFThesaff::GetSIFTHeadSize();
-    int sift_dim = SIFThesaff::GetSIFTD();
+    int head_len = 0;
+    int dim = 0;
+	// SIFThesaff
+	if (run_param.feature_type == FEAT_SIFTHESAFF)
+	{
+		head_len = SIFThesaff::GetSIFTHeadSize();
+		dim = SIFThesaff::GetSIFTD();
+	}
+	// ORB
+	else
+	{
+		head_len = orb::GetORBHeadSize();
+		dim = orb::GetORBD();
+	}
 
     if (load_mode == LOAD_KP)  // Load with keypoint
     {
@@ -950,7 +893,7 @@ void LoadFeature(size_t start_idx, size_t load_size, int load_mode, Matrix<float
         /*cout << "done! (in " << setprecision(2) << fixed << TimeElapse(startTime) << " s)" << endl;
         */
         // Wrap keypoint to matrix for flann knn search
-        load_data = Matrix<float>(kp_dat, load_size, sift_head_len);
+        load_data = Matrix<float>(kp_dat, load_size, head_len);
 
         /*
         cout << "kp [" << load_size << "," << 5 << "]" << endl;
@@ -975,7 +918,7 @@ void LoadFeature(size_t start_idx, size_t load_size, int load_mode, Matrix<float
         */
 
         // Wrap descriptor to matrix for flann knn search
-        load_data = Matrix<float>(desc_dat, load_size, sift_dim);
+        load_data = Matrix<float>(desc_dat, load_size, dim);
     }
 }
 
@@ -1121,7 +1064,13 @@ string SamplingDatabase(int sample_size)
     size_t offset_feature_id = 0;
     size_t current_feature_amount = 0;
     size_t total_feature_amount = 0;
-    size_t dimension = SIFThesaff::GetSIFTD();
+	int dim = 0;
+	// SIFThesaff
+	if (run_param.feature_type == FEAT_SIFTHESAFF)
+		dim = SIFThesaff::GetSIFTD();
+	// ORB
+	else
+		dim = orb::GetORBD();
     for (size_t img_id = 0; img_id < total_image; img_id++)
     {
         current_feature_amount = feature_count_per_image[img_id];
@@ -1134,7 +1083,7 @@ string SamplingDatabase(int sample_size)
             HDF_read_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", desc_dat, offset_feature_id, current_feature_amount);
 
             // Save append
-            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", desc_dat, current_feature_amount, dimension);
+            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", desc_dat, current_feature_amount, dim);
             did_write = true;
 
             // Accumulate total sampled features
@@ -1192,7 +1141,13 @@ string SamplingOnTheFly()
     bool did_write = false;
 
     // Sift header
-    int sift_dim = SIFThesaff::GetSIFTD();              // dataset dimension
+    int dim = 0;		// dataset dimension
+	// SIFThesaff
+	if (run_param.feature_type == FEAT_SIFTHESAFF)
+		dim = SIFThesaff::GetSIFTD();
+	// ORB
+	else
+		dim = orb::GetORBD();
 
     // Sampling variables
     size_t total_image = ImgLists.size();
@@ -1231,46 +1186,71 @@ string SamplingOnTheFly()
             #pragma omp for schedule(dynamic,1) reduction(+ : block_feature_count)
             for (size_t block_idx = 0; block_idx < block_size; block_idx++)
             {
-                size_t curr_img_idx = sampled_id[block_idx];
-                //string curr_img_feature_path = run_param.dataset_feature_root_dir + "/" + run_param.feature_name + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx] + ".sifthesaff";
-                string curr_img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx];
+				// SIFThesaff
+				if (run_param.feature_type == FEAT_SIFTHESAFF)
+				{
+					size_t curr_img_idx = sampled_id[block_idx];
+					string curr_img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx];
 
-                SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
-                //sifthesaff_dataset.importKeypoints(curr_img_feature_path);
-                sifthesaff_dataset.extractPerdochSIFT(curr_img_path);
+					SIFThesaff sifthesaff_dataset(run_param.colorspace, run_param.normpoint, run_param.rootsift, false);
+					sifthesaff_dataset.extractPerdochSIFT(curr_img_path);
 
-                /// Packing feature
-                int num_kp = sifthesaff_dataset.num_kp;
-                block_feature_count += num_kp;
+					/// Packing feature
+					int num_kp = sifthesaff_dataset.num_kp;
+					block_feature_count += num_kp;
 
-                float* desc_dat = new float[num_kp * sift_dim];         // descriptor data
-                for(int row = 0; row < num_kp; row++)
-                {
-                    //== descriptor
-                    for(int col = 0; col < sift_dim; col++)
-                        desc_dat[row * sift_dim + col] = sifthesaff_dataset.desc[row][col];
-                }
-                desc_buffer[block_idx] = desc_dat;
-                numkp_buffer[block_idx] = num_kp;
+					float* desc_dat = new float[num_kp * dim];         // descriptor data
+					for(int row = 0; row < num_kp; row++)
+					{
+						//== descriptor
+						for(int col = 0; col < dim; col++)
+							desc_dat[row * dim + col] = sifthesaff_dataset.desc[row][col];
+					}
+					desc_buffer[block_idx] = desc_dat;
+					numkp_buffer[block_idx] = num_kp;
+				}
+				// ORB
+				else
+				{
+					size_t curr_img_idx = sampled_id[block_idx];
+					string curr_img_path = run_param.dataset_root_dir + "/" + ParentPaths[Img2ParentsIdx[curr_img_idx]] + "/" + ImgLists[curr_img_idx];
+
+					orb orb_dataset(run_param.colorspace, run_param.normpoint, false);
+					orb_dataset.extract(curr_img_path);
+
+					/// Packing feature
+					int num_kp = orb_dataset.num_kp;
+					block_feature_count += num_kp;
+
+					float* desc_dat = new float[num_kp * dim];         // descriptor data
+					for(int row = 0; row < num_kp; row++)
+					{
+						//== descriptor
+						for(int col = 0; col < dim; col++)
+							desc_dat[row * dim + col] = orb_dataset.desc[row][col];
+					}
+					desc_buffer[block_idx] = desc_dat;
+					numkp_buffer[block_idx] = num_kp;
+				}
             }
         }
 
         /// Flushing out to HDF5 file
         if (block_feature_count)
         {
-            float* block_desc = new float[block_feature_count * sift_dim];
+            float* block_desc = new float[block_feature_count * dim];
             // Packing all features into one before writing to HDF5
             size_t desc_offset = 0;
             for(size_t block_id = 0; block_id < block_size; block_id++)
             {
                 // Pack desc
-                size_t desc_size = sift_dim * numkp_buffer[block_id];
+                size_t desc_size = dim * numkp_buffer[block_id];
                 for(size_t col = 0; col < desc_size; col++)
                     block_desc[desc_offset + col] = desc_buffer[block_id][col];
                 desc_offset += desc_size;
             }
 
-            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", block_desc, block_feature_count, sift_dim);
+            HDF_write_append_2DFLOAT(feature_descriptor_sample_path, did_write, "descriptor", block_desc, block_feature_count, dim);
 
             did_write = true;
 
@@ -2402,21 +2382,21 @@ void SiftPackRepair()
     {
         cout << "Start updating.."; cout.flush();
         // Packing feature
-        int sift_head_len = SIFThesaff::GetSIFTHeadSize();
-        int sift_dim = SIFThesaff::GetSIFTD();
-        float* kp_dat = new float[siftextract.num_kp * sift_head_len];
-        float* desc_dat = new float[siftextract.num_kp * sift_dim];
+        int head_len = SIFThesaff::GetSIFTHeadSize();
+        int dim = SIFThesaff::GetSIFTD();
+        float* kp_dat = new float[siftextract.num_kp * head_len];
+        float* desc_dat = new float[siftextract.num_kp * dim];
         for(int row = 0; row < siftextract.num_kp; row++)
         {
             // Slowdown by copying here***
 
             //== keypoint
-            for(int col = 0; col < sift_head_len; col++)
-                kp_dat[row * sift_head_len + col] = siftextract.kp[row][col];
+            for(int col = 0; col < head_len; col++)
+                kp_dat[row * head_len + col] = siftextract.kp[row][col];
 
             //== descriptor
-            for(int col = 0; col < sift_dim; col++)
-                desc_dat[row * sift_dim + col] = siftextract.desc[row][col];
+            for(int col = 0; col < dim; col++)
+                desc_dat[row * dim + col] = siftextract.desc[row][col];
         }
 
         // Finding offset start
@@ -2424,8 +2404,8 @@ void SiftPackRepair()
         for (size_t id = 0; id < img_idx; id++)
             accumulated_offset += feature_count_per_image[id];
 
-        HDF_update_row_2DFLOAT(run_param.feature_keypoint_path, "keypoint", kp_dat, accumulated_offset, siftextract.num_kp, sift_head_len);
-        HDF_update_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", desc_dat, accumulated_offset, siftextract.num_kp, sift_dim);
+        HDF_update_row_2DFLOAT(run_param.feature_keypoint_path, "keypoint", kp_dat, accumulated_offset, siftextract.num_kp, head_len);
+        HDF_update_row_2DFLOAT(run_param.feature_descriptor_path, "descriptor", desc_dat, accumulated_offset, siftextract.num_kp, dim);
         cout << "done!" << endl;
 
         // Release memory
